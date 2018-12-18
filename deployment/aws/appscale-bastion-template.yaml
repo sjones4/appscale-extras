@@ -1,0 +1,117 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Bastion host / jumpbox for AppScale deployments, requires environment
+Parameters:
+  EC2InstanceType:
+    Description: EC2 instance type for bastion host
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+Mappings:
+  # https://cloud-images.ubuntu.com/locator/ec2/
+  AWSRegion2AMI:
+    cn-north-1:
+      Xenial1604: ami-013ead89472fc7464
+    eu-central-1:
+      Xenial1604: ami-0cfc1cd9ab351357c
+    eu-west-1:
+      Xenial1604: ami-09f0b8b3e41191524
+    eu-west-2:
+      Xenial1604: ami-0f60b09eab2ef8366
+    us-east-1:
+      Xenial1604: ami-0f9cf087c1f27d9b1
+    us-east-2:
+      Xenial1604: ami-0653e888ec96eab9b
+    us-west-1:
+      Xenial1604: ami-08945b3352c7bf9c0
+    us-west-2:
+      Xenial1604: ami-076e276d85f524150
+Resources:
+  BastionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: /appscale/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+  BastionInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /appscale/
+      Roles:
+        - !Ref BastionRole
+  BastionSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Security group for bastion host
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: AppScale Bastion Group
+  BastionInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      ImageId: !FindInMap
+        - AWSRegion2AMI
+        - !Ref AWS::Region
+        - Xenial1604
+      InstanceType: !Ref EC2InstanceType
+      UserData:
+        Fn::Base64: !Sub |
+          #cloud-config
+          bootcmd:
+           - test ! -z "$(blkid /dev/nvme1n1)" || mkfs -t ext4 -L appscale-bvfs /dev/nvme1n1
+           - test -d /appscale || mkdir -v /appscale
+          mounts:
+           - ["LABEL=appscale-bvfs", "/appscale", "ext4", "defaults,nofail", "0", "2"]
+          runcmd:
+           - useradd -d /appscale appscale
+           - cp /etc/skel/.bash* /appscale
+           - cp /etc/skel/.profile /appscale
+           - chown -R appscale.appscale /appscale
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !ImportValue AppScalePublicSubnetId
+          GroupSet:
+            - !Ref BastionSecurityGroup
+      Volumes:
+        - VolumeId: !ImportValue AppScaleBastionVolumeId
+          Device: /dev/sdf
+      Tags:
+        - Key: Name
+          Value: AppScale Bastion
+  BastionEipAssociation:
+    Type: "AWS::EC2::EIPAssociation"
+    Properties:
+      AllocationId: !ImportValue AppScaleBastionEipAllocationId
+      InstanceId: !Ref BastionInstance
+Outputs:
+  BastionInstanceId:
+    Description: Identifier for the AppScale bastion host instance
+    Value: !Ref BastionInstance
+  BastionHost:
+    Description: Hostname for the AppScale bastion host
+    Value: !GetAtt BastionInstance.PublicDnsName
+  BastionIp:
+    Description: IP address for the AppScale bastion host
+    Value: !GetAtt BastionInstance.PublicIp
+
