@@ -1,7 +1,8 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: >-
-  Bastion host / jumpbox for AppScale deployments, requires environment
+  Bastion host / jumpbox for AppScale deployments, requires bastion
+  resources, environment
 Parameters:
   EC2InstanceType:
     Description: EC2 instance type for bastion host
@@ -15,6 +16,7 @@ Parameters:
       - t3.xlarge
 Mappings:
   # https://cloud-images.ubuntu.com/locator/ec2/
+  # search for hvm:ebs-ssd 16.04 LTS
   AWSRegion2AMI:
     cn-north-1:
       Xenial1604: ami-013ead89472fc7464
@@ -62,7 +64,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0
+          CidrIp: !ImportValue AppScaleVpcCidr
       Tags:
         - Key: Name
           Value: AppScale Bastion Group
@@ -83,11 +85,24 @@ Resources:
            - test -d /appscale || mkdir -v /appscale
           mounts:
            - ["LABEL=appscale-bvfs", "/appscale", "ext4", "defaults,nofail", "0", "2"]
+          packages:
+           - git
+           - python
+           - python-pip
+           - python-virtualenv
           runcmd:
-           - useradd -d /appscale appscale
+           - useradd --home-dir /appscale --shell /bin/bash appscale
            - cp /etc/skel/.bash* /appscale
            - cp /etc/skel/.profile /appscale
            - chown -R appscale.appscale /appscale
+           - chmod 700 /appscale
+          write_files:
+           - path: /etc/sudoers.d/80-appscale-user
+             owner: "root:root"
+             permissions: "0440"
+             content: |
+               # User rules for appscale
+               appscale ALL=(ALL) NOPASSWD:ALL
       NetworkInterfaces:
         - DeviceIndex: 0
           SubnetId: !ImportValue AppScalePublicSubnetId

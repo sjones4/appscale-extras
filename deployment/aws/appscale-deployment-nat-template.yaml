@@ -1,0 +1,24 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  NAT gateway for use by deployments in private subnets, requires
+  environment
+Resources:
+  NatGateway:
+    Type: "AWS::EC2::NatGateway"
+    Properties:
+      AllocationId: !GetAtt NatGatewayEip.AllocationId
+      SubnetId: !ImportValue AppScalePublicSubnetId
+      Tags:
+        - Key: Name
+          Value: AppScale NAT Gateway
+  NatGatewayEip:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+Outputs:
+  NatGateway:
+    Description: NatGatewayId for the AppScale NAT gateway
+    Value: !Ref NatGateway
+    Export:
+      Name: AppScaleNatGatewayId

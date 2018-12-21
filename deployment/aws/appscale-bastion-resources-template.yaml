@@ -1,0 +1,40 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Bastion host / jumpbox resources (eip, volume, etc), requires
+  environment
+Parameters:
+  BastionVolumeSize:
+    Description: Size of attached volume for bastion host
+    Type: Number
+    MinValue: 10
+    MaxValue: 1000
+    Default: 50
+Resources:
+  BastionEip:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+  BastionVolume:
+    Type: "AWS::EC2::Volume"
+    Properties:
+      AvailabilityZone: !ImportValue AppScalePublicSubnetZone
+      Size: !Ref BastionVolumeSize
+      Tags:
+        - Key: Name
+          Value: AppScale Bastion
+Outputs:
+  BastionEip:
+    Description: The Elastic IP for use with the Bastion host
+    Value: !Ref BastionEip
+  BastionEipAllocation:
+    Description: The Elastic IP allocation for use with the Bastion host
+    Value: !GetAtt BastionEip.AllocationId
+    Export:
+      Name: AppScaleBastionEipAllocationId
+  BastionVolume:
+    Description: The VolumeId for use with the Bastion host
+    Value: !Ref BastionVolume
+    Export:
+      Name: AppScaleBastionVolumeId
+

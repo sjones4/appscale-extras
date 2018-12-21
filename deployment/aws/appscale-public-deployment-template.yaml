@@ -1,8 +1,7 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: >-
-  AppScale per-deployment private subnet template, requires environment
-  and nat
+  AppScale per-deployment public subnet template, requires environment
 Parameters:
   Label:
     Description: Short label for deployment
@@ -53,7 +52,7 @@ Resources:
     Properties:
       RouteTableId: !Ref RouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !ImportValue AppScaleNatGatewayId
+      GatewayId: !ImportValue AppScaleGatewayId
   SubnetRouteTableAssociation:
     Type: "AWS::EC2::SubnetRouteTableAssociation"
     Properties:
@@ -78,7 +77,7 @@ Resources:
       PortRange:
         From: "22"
         To: "22"
-  InboundHttpNetworkAclEntry:
+  InboundPublicHttpNetworkAclEntry:
     Type: "AWS::EC2::NetworkAclEntry"
     Properties:
       NetworkAclId: !Ref NetworkAcl
@@ -86,11 +85,11 @@ Resources:
       Protocol: "6"
       RuleAction: allow
       Egress: "false"
-      CidrBlock: !ImportValue AppScaleVpcCidr
+      CidrBlock: 0.0.0.0/0
       PortRange:
         From: "80"
         To: "80"
-  InboundHttpsNetworkAclEntry:
+  InboundPublicHttpsNetworkAclEntry:
     Type: "AWS::EC2::NetworkAclEntry"
     Properties:
       NetworkAclId: !Ref NetworkAcl
@@ -98,11 +97,11 @@ Resources:
       Protocol: "6"
       RuleAction: allow
       Egress: "false"
-      CidrBlock: !ImportValue AppScaleVpcCidr
+      CidrBlock: 0.0.0.0/0
       PortRange:
         From: "443"
         To: "443"
-  InboundLowRegisteredNetworkAclEntry:
+  InboundPublicLowRegisteredNetworkAclEntry:
     Type: "AWS::EC2::NetworkAclEntry"
     Properties:
       NetworkAclId: !Ref NetworkAcl
@@ -110,11 +109,11 @@ Resources:
       Protocol: "6"
       RuleAction: allow
       Egress: "false"
-      CidrBlock: !ImportValue AppScaleVpcCidr
+      CidrBlock: 0.0.0.0/0
       PortRange:
         From: "1024"
         To: "32767"
-  InboundEphemeralNetworkAclEntry:
+  InboundPublicEphemeralNetworkAclEntry:
     Type: "AWS::EC2::NetworkAclEntry"
     Properties:
       NetworkAclId: !Ref NetworkAcl
@@ -143,6 +142,24 @@ Resources:
     Properties:
       SubnetId: !Ref Subnet
       NetworkAclId: !Ref NetworkAcl
+  # Deployment resources
+  AppScaleSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: !Sub ${Label} deployment security group
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !ImportValue AppScaleVpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Group
+  AppScaleEip:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
   # Service user
   AppScaleUser:
     Type: "AWS::IAM::User"
@@ -182,6 +199,12 @@ Outputs:
   Subnet:
     Description: AppScale deployment subnet identifier
     Value: !Ref Subnet
+  Eip:
+    Description: The Elastic IP for use with the deployment
+    Value: !Ref AppScaleEip
+  EipAllocation:
+    Description: The Elastic IP allocation for use with the deployment
+    Value: !GetAtt AppScaleEip.AllocationId
   UserName:
     Description: AppScale deployment user name (add access key for user)
     Value: !Ref AppScaleUser
