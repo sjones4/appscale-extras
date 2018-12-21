@@ -22,15 +22,19 @@ function log() {
   echo "$(date --iso-8601=seconds) ${1}"
 }
 
+if [ "${1:-}" == "--packages" ] ; then
+  log "Installing required packages"
+  apt-get update
+  apt-get --assume-yes install ${PACKAGES}
+  log "Completed required package install"
+  exit 0
+fi
+
 if [ "${REL_DIR}" == "${BASE_DIR}" ] ; then
   log "Using directory ${REL_DIR}"
 else
   log "Using directory ${REL_DIR} [${BASE_DIR}]"
 fi
-
-log "Installing required packages"
-apt-get update
-apt-get --assume-yes install ${PACKAGES}
 
 log "Creating deployment directories"
 for DIRECTORY in ${DIRECTORIES}; do
