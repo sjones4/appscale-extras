@@ -97,7 +97,7 @@ Resources:
       Protocol: "6"
       RuleAction: allow
       Egress: "false"
-      CidrBlock: !Ref VPC.CidrBlock
+      CidrBlock: !GetAtt VPC.CidrBlock
       PortRange:
         From: "0"
         To: "65535"
