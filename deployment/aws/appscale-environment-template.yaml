@@ -8,6 +8,8 @@ Mappings:
       CIDR: 10.4.0.0/16
     Public:
       CIDR: 10.4.0.0/20
+Conditions:
+    IsUsEast1: !Equals [ !Ref "AWS::Region", us-east-1 ]
 Resources:
   VPC:
     Type: "AWS::EC2::VPC"
@@ -24,7 +26,10 @@ Resources:
   DhcpOptions:
     Type: "AWS::EC2::DHCPOptions"
     Properties:
-      DomainName: "eu-central-1.compute.internal"
+      DomainName: !If
+        - IsUsEast1
+        - ec2.internal
+        - !Sub "${AWS::Region}.compute.internal"
       DomainNameServers:
         - "AmazonProvidedDNS"
       NtpServers:
