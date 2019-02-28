@@ -1,0 +1,25 @@
+# Compose for Google Cloud Platform reverse proxy
+#
+# Provides TLS termination so GCP clients can be used unaltered with
+# AppScale Cloud Storage and AppScale Cloud Datastore Proxy
+#
+# Configuration required:
+# * Set extra_hosts for datastore and storage
+#
+version: "2.0"
+services:
+  nginx:
+    image: nginx:1.14-alpine
+    ports:
+      - "80:5080"
+      - "443:5443"
+    extra_hosts:
+      datastore: "10.10.9.168"
+      storage: "10.10.9.168"
+    volumes:
+      - ./googleapis.conf:/etc/nginx/conf.d/googleapis.conf:ro
+      - ./googleapis.crt:/etc/nginx/googleapis.crt:ro
+      - ./googleapis.key:/etc/nginx/googleapis.key:ro
+      - ./logs:/var/log/nginx
+    command: nginx -g 'daemon off;'
+
