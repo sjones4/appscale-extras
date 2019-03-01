@@ -14,12 +14,13 @@ services:
       - "80:5080"
       - "443:5443"
     extra_hosts:
-      datastore: "10.10.9.168"
-      storage: "10.10.9.168"
+      datastore: "GP_DATASTORE_HOST"
+      storage: "GP_STORAGE_HOST"
     volumes:
       - ./googleapis.conf:/etc/nginx/conf.d/googleapis.conf:ro
       - ./googleapis.crt:/etc/nginx/googleapis.crt:ro
       - ./googleapis.key:/etc/nginx/googleapis.key:ro
       - ./logs:/var/log/nginx
+    restart: always
     command: nginx -g 'daemon off;'
 
