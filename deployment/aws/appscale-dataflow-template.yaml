@@ -1,0 +1,313 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Dataflow runner host for AppScale, requires Dataflow environment.
+Parameters:
+  Label:
+    Description: Short label for the dataflow runner
+    Type: String
+    AllowedPattern: "[A-Z][A-Za-z0-9 ]{2,32}"
+    ConstraintDescription: >-
+      Label must start with an uppercase character and may contain 32
+      uppercase, lowercase, and numeric characters and spaces
+  DataflowProject:
+    Description: The Google Cloud Platform project dataflow will access
+    Type: String
+    AllowedPattern: "[a-z0-9-]{2,32}"
+  DataflowServiceAccount:
+    Description: Service account metadata [COUNTYCODE(2) STATE/REGION(2) CITY(2-64) NAME(2-64)]
+    Type: String
+    AllowedPattern: "[A-Z]{2} [A-Z]{2} [A-Za-z]{2,64} [A-Za-z0-9-]{2,64}"
+  DatastoreHost:
+    Description: IP address of the datastore host
+    Type: String
+    AllowedPattern: "[0-9.]{7,15}"
+  AssociatePublicIp:
+    Description: Associate a Public IP address with the instance
+    AllowedValues: ["true", "false"]
+    Type: String
+    Default: "true"
+  EC2InstanceType:
+    Description: EC2 instance type for dataflow runner instance
+    Type: String
+    Default: t3.large
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+  Ec2SshKey:
+    Description: EC2 SSH key for dataflow runner instance access
+    Type: String
+    Default: "-"
+Conditions:
+  UseEc2SshKeyParameter: !Not [!Equals [!Ref Ec2SshKey, "-"]]
+Mappings:
+  # https://cloud-images.ubuntu.com/locator/ec2/
+  # search for hvm:ebs-ssd 16.04 LTS
+  AWSRegion2AMI:
+    cn-north-1:
+      Xenial1604: ami-013ead89472fc7464
+    eu-central-1:
+      Xenial1604: ami-0cfc1cd9ab351357c
+    eu-west-1:
+      Xenial1604: ami-09f0b8b3e41191524
+    eu-west-2:
+      Xenial1604: ami-0f60b09eab2ef8366
+    us-east-1:
+      Xenial1604: ami-0f9cf087c1f27d9b1
+    us-east-2:
+      Xenial1604: ami-0653e888ec96eab9b
+    us-west-1:
+      Xenial1604: ami-08945b3352c7bf9c0
+    us-west-2:
+      Xenial1604: ami-076e276d85f524150
+Resources:
+  DataflowRunnerAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !ImportValue AppScaleCloudStorageIamUser
+  DataflowRunnerInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      IamInstanceProfile: !ImportValue AppScaleDataflowRunnerInstanceProfile
+      ImageId: !FindInMap
+        - AWSRegion2AMI
+        - !Ref AWS::Region
+        - Xenial1604
+      InstanceType: !Ref EC2InstanceType
+      KeyName: !If [UseEc2SshKeyParameter, !Ref Ec2SshKey, !Ref "AWS::NoValue"]
+      UserData:
+        Fn::Base64: !Sub |
+          #cloud-config
+          packages:
+           - docker-compose
+           - git
+           - openssl
+          write_files:
+           - path: /root/bin/repo_setup.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               REPO_DIR=${!1:-/root/repos}
+               mkdir -pv "${!REPO_DIR}"
+               cd "${!REPO_DIR}"
+               git clone -b master         https://github.com/sjones4/appscale-extras.git
+               git clone -b topic-dataflow https://github.com/sjones4/appscale-cloud-storage.git
+               git clone -b master         https://github.com/sjones4/appscale-cloud-datastore-proxy.git
+           - path: /root/bin/build_images.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               REPO_DIR=${!1:-/root/repos}
+               pushd "${!REPO_DIR}/appscale-extras/docker/gcp-client/"
+               docker build --rm -t appscale-gcp-client-runtime .
+               popd
+               pushd "${!REPO_DIR}/appscale-cloud-datastore-proxy"
+               docker build --rm -t appscale-cloud-datastore-proxy .
+               popd
+               pushd "${!REPO_DIR}/appscale-cloud-storage"
+               docker build --rm -t appscale-cloud-storage .
+               popd
+           - path: /root/bin/generate_credentials.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               CREDS_DIR="/var/lib/appscale/service-credentials/"
+               [ -d "${!CREDS_DIR}" ] || mkdir -pv "${!CREDS_DIR}"
+               pushd "${!CREDS_DIR}"
+               /opt/appscale-service-credentials/generate_creds.sh ${DataflowServiceAccount} ${DataflowProject}@appscale.internal
+               popd
+           - path: /root/bin/install.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               REPO_DIR=${!1:-/root/repos}
+               # GCP service proxy for dataflow piplines
+               pushd "${!REPO_DIR}/appscale-extras/docker/gcp-proxy"
+               [ -d "/opt/appscale-gcp-proxy" ] || mkdir -pv "/opt/appscale-gcp-proxy"
+               cp -vf docker-compose.yaml googleapis.* /opt/appscale-gcp-proxy/
+               sed --in-place "s/GP_DATASTORE_HOST/$(hostname -i)/" /opt/appscale-gcp-proxy/docker-compose.yaml
+               sed --in-place "s/GP_STORAGE_HOST/$(hostname -i)/"   /opt/appscale-gcp-proxy/docker-compose.yaml
+               popd
+           - path: /root/bin/start_services.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               pushd /opt/appscale-cloud-storage
+               docker-compose up -d
+               docker-compose run --rm storage appscale-prime-cloud-storage
+               popd
+               pushd /opt/appscale-cloud-datastore-proxy
+               docker-compose up -d
+               popd
+               pushd /opt/appscale-gcp-proxy
+               docker-compose up -d
+               popd
+           - path: /opt/appscale-cloud-datastore-proxy/docker-compose.yaml
+             owner: "root:root"
+             permissions: "0644"
+             content: |
+               # Compose for AppScale Cloud Datastore Proxy
+               version: "2.0"
+               services:
+                 cloud_datastore_proxy:
+                   image: appscale-cloud-datastore-proxy
+                   ports:
+                     - "3500:3500"
+                   volumes:
+                     - ./log:/opt/appscale-cloud-datastore-proxy/log
+                   environment:
+                     ACDP_DATASTORE_HOST: "${DatastoreHost}"
+                     ACDP_LOGGING: "--debug"
+                   restart: always
+           - path: /opt/appscale-cloud-storage/acs-settings.cfg
+             owner: "root:root"
+             permissions: "0644"
+             content: |
+               # S3 backend administrative credentials
+               S3_ADMIN_CREDS = {
+                   'access_key': '${DataflowRunnerAccessKey}',
+                   'secret_key': '${DataflowRunnerAccessKey.SecretAccessKey}'
+               }
+               # S3 backend endpoint
+               S3_HOST = 's3.${AWS::Region}.amazonaws.com'
+               S3_PORT = 443
+               S3_USE_SSL = True
+               # Postgres for storing bucket metadata and session state
+               POSTGRES_DB = {
+                   'host': 'postgres',
+                   'dbname': 'postgres',
+                   'user': 'postgres',
+                   'password': 'changeme'
+               }
+               # User accounts authorized to use AppScale Cloud Storage.
+               USERS = {
+                   '${DataflowProject}@appscale.internal': {
+                       'certificate': '/config/credentials/${DataflowProject}.crt',
+                       'aws_access_key': '${DataflowRunnerAccessKey}',
+                       'aws_secret_key': '${DataflowRunnerAccessKey.SecretAccessKey}'
+                   }
+               }
+           - path: /opt/appscale-cloud-storage/docker-compose.yaml
+             owner: "root:root"
+             permissions: "0644"
+             content: |
+               # Compose for AppScale Cloud Storage with Postgres metadata storage
+               version: "2.0"
+               services:
+                 postgres:
+                   image: postgres:10.7-alpine
+                   ports:
+                     - "5432:5432"
+                   volumes:
+                     - ./data/postgres:/var/lib/postgresql/data
+                   environment:
+                     POSTGRES_PASSWORD: changeme
+                     PGDATA: /var/lib/postgresql/data/pgdata
+                   restart: always
+                   command: postgres
+                 storage:
+                   image: appscale-cloud-storage
+                   depends_on:
+                     - postgres
+                   ports:
+                     - "5000:5000"
+                   volumes:
+                     - ./acs-settings.cfg:/config/acs-settings.cfg:ro
+                     - /var/lib/appscale/service-credentials:/config/credentials:ro
+                   environment:
+                     APPSCALE_CLOUD_STORAGE_SETTINGS: /config/acs-settings.cfg
+                   restart: always
+                   command: flask run --host=storage
+           - path: /opt/appscale-gcp-client/run.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               GCP_PROXY="$(hostname -i)"
+               [ ! -z "${!1}" ] || { echo -e "Usage:\n\t${!0} COMMAND [ARG]*\n"; exit 1; }
+               docker run --rm -it \
+                 --add-host=accounts.google.com:${!GCP_PROXY} \
+                 --add-host=batch-datastore.googleapis.com:${!GCP_PROXY} \
+                 --add-host=datastore.googleapis.com:${!GCP_PROXY} \
+                 --add-host=storage.googleapis.com:${!GCP_PROXY} \
+                 --add-host=www.googleapis.com:${!GCP_PROXY} \
+                 --env GOOGLE_APPLICATION_CREDENTIALS=/var/lib/appscale/service-credentials/${DataflowProject}.json \
+                 -v /var/lib/appscale/service-credentials:/var/lib/appscale/service-credentials \
+                 -v $(pwd):/working -w /working \
+                 appscale-gcp-client-runtime "$@"
+           - path: /opt/appscale-service-credentials/generate_creds.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               # Generate service credentials for use with AppScale cloud storage
+               # Subject
+               SUB_COUNTRY_CODE="${!1}"
+               SUB_STATE="${!2}"
+               SUB_CITY="${!3}"
+               SUB_CN="${!4}"
+               SUB_EMAIL="${!5}"
+               # Verify details
+               if [ -z "${!1}" ] || [ -z "${!2}" ] || [ -z "${!3}" ] || [ -z "${!4}" ] || [ -z "${!5}" ]; then
+                 echo "Usage: ${!0} COUNTRY STATE CITY CN EMAIL"
+                 exit 1
+               fi
+               # Config
+               CLIENT_EMAIL="${!CLIENT_EMAIL:-${!SUB_EMAIL}}"
+               CLIENT_ID="${!CLIENT_ID:-${!CLIENT_EMAIL%%@*}}"
+               PROJECT_ID="${!PROJECT_ID:-${!CLIENT_ID}}"
+               TOKEN_URI="${!TOKEN_URI:-http://localhost:5000/o/oauth2/token}"
+               # Generate certificate / key
+               openssl req \
+                 -x509 -newkey rsa:2048 -sha256 -nodes \
+                 -subj "/C=${!SUB_COUNTRY_CODE}/ST=${!SUB_STATE}/L=${!SUB_CITY}/CN=${!SUB_CN}/emailAddress=${!SUB_EMAIL}" \
+                 -days 100000 -keyout "${!CLIENT_ID}.key" -out "${!CLIENT_ID}.crt"
+               # Json private key details
+               PRIVATE_KEY_ID=$(openssl pkcs8 -in "${!CLIENT_ID}.key" -nocrypt -topk8 -outform DER | openssl sha1 | cut -d ' ' -f 2)
+               PRIVATE_KEY=$(sed -z 's/\n/\\n/g' "${!CLIENT_ID}.key")
+               # Write credentials Json
+               cat>"${!CLIENT_ID}.json"<<EOF
+               {
+                   "type": "service_account",
+                   "project_id": "${!PROJECT_ID}",
+                   "private_key_id": "${!PRIVATE_KEY_ID}",
+                   "private_key": "${!PRIVATE_KEY}",
+                   "client_email": "${!CLIENT_EMAIL}",
+                   "client_id": "${!CLIENT_ID}",
+                   "token_uri": "${!TOKEN_URI}"
+               }
+               EOF
+               echo "Generated ${!CLIENT_ID}.json ${!CLIENT_ID}.crt ${!CLIENT_ID}.key"
+          runcmd:
+           - /root/bin/repo_setup.sh
+           - /root/bin/install.sh
+           - /root/bin/generate_credentials.sh
+           - /root/bin/build_images.sh
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !ImportValue AppScaleDataflowSubnetId
+          GroupSet:
+            - !ImportValue AppScaleDataflowRunnerSecurityGroup
+          AssociatePublicIpAddress: !Ref AssociatePublicIp
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Dataflow Runner
+Outputs:
+  DataflowRunnerInstanceId:
+    Description: Identifier for the AppScale dataflow runner host instance
+    Value: !Ref DataflowRunnerInstance
+  DataflowRunnerPrivateIp:
+    Description: Private IP address for the dataflow runner host
+    Value: !GetAtt DataflowRunnerInstance.PrivateIp
+  DatastoreFirewallUpdate:
+    Description: "IMPORTANT - Update the firewall.conf on the datastore host"
+    Value: !Sub "iptables -A INPUT -p tcp -s ${DataflowRunnerInstance.PrivateIp} --dport 8888 -j ACCEPT"
+

@@ -1,0 +1,227 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AppScale Dataflow environment template, requires environment.
+Parameters:
+  BucketName:
+    Description: S3 bucket used for Appscale Cloud Storage
+    Type: String
+  SubnetCidr:
+    Description: CIDR for the deployment subnet
+    Type: String
+    Default: "10.4.16.0/20"
+    AllowedValues:
+      - "10.4.16.0/20"
+      - "10.4.32.0/20"
+      - "10.4.48.0/20"
+      - "10.4.64.0/20"
+      - "10.4.80.0/20"
+      - "10.4.96.0/20"
+      - "10.4.112.0/20"
+      - "10.4.128.0/20"
+      - "10.4.144.0/20"
+      - "10.4.160.0/20"
+      - "10.4.176.0/20"
+      - "10.4.192.0/20"
+      - "10.4.208.0/20"
+      - "10.4.224.0/20"
+      - "10.4.240.0/20"
+Resources:
+  Subnet:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !ImportValue AppScaleVpcId
+      CidrBlock: !Ref SubnetCidr
+      Tags:
+        - Key: Name
+          Value: AppScale Dataflow Subnet
+  RouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !ImportValue AppScaleVpcId
+      Tags:
+        - Key: Name
+          Value: AppScale Dataflow Routes
+  DefaultRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !ImportValue AppScaleGatewayId
+  SubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+  NetworkAcl:
+    Type: "AWS::EC2::NetworkAcl"
+    Properties:
+      VpcId: !ImportValue AppScaleVpcId
+      Tags:
+        - Key: Name
+          Value: AppScale Dataflow Network ACL
+  InboundSSHNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "110"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !ImportValue AppScaleVpcCidr
+      PortRange:
+        From: "22"
+        To: "22"
+  InboundEphemeralNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "200"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: "32768"
+        To: "65535"
+  OutboundNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "100"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "true"
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: "0"
+        To: "65535"
+  SubnetNetworkAclAssociation:
+    Type: "AWS::EC2::SubnetNetworkAclAssociation"
+    Properties:
+      SubnetId: !Ref Subnet
+      NetworkAclId: !Ref NetworkAcl
+  CloudStorageBucket:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale Cloud Storage Bucket
+  CloudStorageIamUser:
+    Type: "AWS::IAM::User"
+    Properties:
+      Path: /appscale/
+      Policies:
+        - PolicyName: "CloudStorageS3"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "s3:GetBucketLocation"
+                  - "s3:GetBucketTagging"
+                  - "s3:GetBucketVersioning"
+                  - "s3:HeadBucket"
+                  - "s3:ListAllMyBuckets"
+                  - "s3:ListBucket"
+                  - "s3:ListBucketByTags"
+                  - "s3:ListBucketMultipartUploads"
+                  - "s3:ListBucketVersions"
+                Resource: "*"
+                Effect: "Allow"
+              - Action:
+                  - "s3:AbortMultipartUpload"
+                  - "s3:DeleteObject"
+                  - "s3:DeleteObjectTagging"
+                  - "s3:DeleteObjectVersion"
+                  - "s3:DeleteObjectVersionTagging"
+                  - "s3:GetObject"
+                  - "s3:GetObjectAcl"
+                  - "s3:GetObjectTagging"
+                  - "s3:GetObjectTorrent"
+                  - "s3:GetObjectVersion"
+                  - "s3:GetObjectVersionAcl"
+                  - "s3:GetObjectVersionForReplication"
+                  - "s3:GetObjectVersionTagging"
+                  - "s3:GetObjectVersionTorrent"
+                  - "s3:ListMultipartUploadParts"
+                  - "s3:PutObject"
+                  - "s3:PutObjectAcl"
+                  - "s3:PutObjectTagging"
+                  - "s3:PutObjectVersionAcl"
+                  - "s3:PutObjectVersionTagging"
+                  - "s3:RestoreObject"
+                Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+                Effect: "Allow"
+  DataflowRunnerRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: /appscale/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+  DataflowRunnerInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /appscale/
+      Roles:
+        - !Ref DataflowRunnerRole
+  DataflowRunnerSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Security group for dataflow runner hosts
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !ImportValue AppScaleVpcCidr
+      Tags:
+        - Key: Name
+          Value: AppScale Dataflow Runner Group
+Outputs:
+  Vpc:
+    Description: AppScale Dataflow vpc identifier
+    Value: !GetAtt Subnet.VpcId
+  CloudStorageBucket:
+    Description: S3 bucket used with AppScale Cloud Storage
+    Value: !Ref CloudStorageBucket
+    Export:
+      Name: AppScaleCloudStorageBucket
+  CloudStorageIamUser:
+    Description: IAM user used with AppScale Cloud Storage
+    Value: !Ref CloudStorageIamUser
+    Export:
+      Name: AppScaleCloudStorageIamUser
+  DataflowSubnet:
+    Description: SubnetId for the AppScale Dataflow subnet
+    Value: !Ref Subnet
+    Export:
+      Name: AppScaleDataflowSubnetId
+  DataflowSubnetZone:
+    Description: Availability zone of the AppScale Dataflow subnet
+    Value: !GetAtt Subnet.AvailabilityZone
+    Export:
+      Name: AppScaleDataflowSubnetZone
+  DataflowRunnerInstanceProfile:
+    Description: Instance profile for dataflow runner hosts
+    Value: !Ref DataflowRunnerInstanceProfile
+    Export:
+      Name: AppScaleDataflowRunnerInstanceProfile
+  DataflowRunnerSecurityGroup:
+    Description: Security group for dataflow runner hosts
+    Value: !Ref DataflowRunnerSecurityGroup
+    Export:
+      Name: AppScaleDataflowRunnerSecurityGroup
+
