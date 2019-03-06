@@ -9,7 +9,7 @@ Mappings:
     Public:
       CIDR: 10.4.0.0/20
 Conditions:
-    IsUsEast1: !Equals [ !Ref "AWS::Region", us-east-1 ]
+  IsUsEast1: !Equals [ !Ref "AWS::Region", "us-east-1" ]
 Resources:
   VPC:
     Type: "AWS::EC2::VPC"
@@ -28,7 +28,7 @@ Resources:
     Properties:
       DomainName: !If
         - IsUsEast1
-        - ec2.internal
+        - "ec2.internal"
         - !Sub "${AWS::Region}.compute.internal"
       DomainNameServers:
         - "AmazonProvidedDNS"
