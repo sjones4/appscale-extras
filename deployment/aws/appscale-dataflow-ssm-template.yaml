@@ -1,0 +1,229 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Dataflow SSM integration for AppScale, requires Dataflow environment.
+Parameters:
+  RunnerLabel:
+    Description: Label of the target ataflow runner to use
+    Type: String
+    ConstraintDescription: >-
+      The label used when creating the target Dataflow runner
+  RunnerTimeout:
+    Description: Timeout in seconds for Dataflow runs
+    Type: String
+    Default: "900"
+  RunnerTarget:
+    Description: Default target pipeline for the Dataflow runner
+    Type: String
+  RunnerClasspath:
+    Description: Default classpath for the Dataflow runner
+    Type: String
+  RunnerMain:
+    Description: Default main for the Dataflow runner
+    Type: String
+  RunnerProject:
+    Description: Default project to use for Dataflow runner
+    Type: String
+  RunnerLogRetentionDays:
+    Description: Number of days to retain logs from Dataflow runs
+    Type: String
+    Default: "7"
+  S3BucketName:
+    Description: S3 bucket used for Appscale Cloud Storage
+    Type: String
+  S3DeployPipelinePath:
+    Description: Path and name for deployment tarball (no leading /)
+    Type: String
+Resources:
+  DataflowAutomationRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/appscale/dataflow/ssm/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "events.amazonaws.com"
+      Policies:
+        - PolicyName: "DataflowAutomationPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "ssm:ListCommands"
+                  - "ssm:ListCommandInvocations"
+                Effect: "Allow"
+                Resource: "*"
+              - Action: "ssm:SendCommand"
+                Effect: "Allow"
+                Resource: "*"
+              - Action: "ssm:StartAutomationExecution"
+                Effect: "Allow"
+                Resource: "*"
+  DataflowDeployCommandDocument:
+    Type: "AWS::SSM::Document"
+    Properties:
+      DocumentType: "Command"
+      Content:
+        schemaVersion: "2.2"
+        description: "Deploy dataflow job tarball from S3"
+        parameters:
+          object:
+            type: "String"
+            description: "S3 pipeline tarball object to deploy"
+          target:
+            type: "String"
+            description: "Target deployment for pipeline"
+            default: !Ref RunnerTarget
+          strip:
+            type: "String"
+            description: "Directory components to strip on extraction"
+            default: "1"
+        mainSteps:
+          - action: "aws:runShellScript"
+            name: "DeployFromS3"
+            inputs:
+              runCommand:
+                - "mkdir -pv /root/deploy"
+                - "rm -rvf /root/deploy/{{ target }}.tar"
+                - "aws s3 cp {{ object }} /root/deploy/{{ target }}.tar"
+                - "rm -rvf /root/pipelines/{{ target }}"
+                - "mkdir -pv /root/pipelines/{{ target }}"
+                - "tar xvf /root/deploy/{{ target }}.tar -C /root/pipelines/{{ target }} --strip-components={{ strip }}"
+              workingDirectory: "/root"
+              timeoutSeconds: 60
+  DataflowRunnerCommandDocument:
+    Type: "AWS::SSM::Document"
+    Properties:
+      DocumentType: "Command"
+      Content:
+        schemaVersion: "2.2"
+        description: "Run a dataflow job"
+        parameters:
+          target:
+            type: "String"
+            description: "Target deployment for pipeline"
+            default: !Ref RunnerTarget
+          classpath:
+            type: "String"
+            description: "Classpath for the Dataflow runner"
+            default: !Ref RunnerClasspath
+          main:
+            type: "String"
+            description: "Main class for the Dataflow runner"
+          project:
+            type: "String"
+            description: "Project for the Dataflow runner"
+            default: !Ref RunnerProject
+          arguments:
+            type: "String"
+            description: "Arguments for the Dataflow runner"
+        mainSteps:
+          - action: "aws:runShellScript"
+            name: "RunDataflow"
+            inputs:
+              runCommand:
+                - "/opt/appscale-gcp-client/run.sh java -cp {{ classpath }} {{ main }} --project={{ project }} {{ arguments }}"
+              workingDirectory: "/root/pipelines/{{ target }}"
+              timeoutSeconds: !Ref RunnerTimeout
+  DataflowRunnerLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      RetentionInDays: !Ref RunnerLogRetentionDays
+  DataflowDeployAutomationDocument:
+    Type: "AWS::SSM::Document"
+    Properties:
+      DocumentType: "Automation"
+      Content:
+        schemaVersion: "0.3"
+        mainSteps:
+        - name: deployDataflowPipeline
+          action: aws:runCommand
+          inputs:
+            DocumentName: !Ref DataflowDeployCommandDocument
+            Targets:
+              - Key: "tag:Name"
+                Values:
+                  - !Sub "AppScale ${RunnerLabel} Dataflow Runner"
+            Parameters:
+              object:
+                - !Sub "s3://${S3BucketName}/${S3DeployPipelinePath}"
+            CloudWatchOutputConfig:
+              CloudWatchLogGroupName: !Ref DataflowRunnerLogGroup
+              CloudWatchOutputEnabled: true
+          isEnd: true
+  DataflowRunnerAutomationDocument:
+    Type: "AWS::SSM::Document"
+    Properties:
+      DocumentType: "Automation"
+      Content:
+        schemaVersion: "0.3"
+        parameters:
+          target:
+            type: "String"
+            description: "Target deployment for pipeline"
+            default: !Ref RunnerTarget
+          classpath:
+            type: "String"
+            description: "Classpath for the Dataflow runner"
+            default: !Ref RunnerClasspath
+          main:
+            type: "String"
+            description: "Main class for the Dataflow runner"
+          project:
+            type: "String"
+            description: "Project for the Dataflow runner"
+            default: !Ref RunnerProject
+          arguments:
+            type: "String"
+            description: "Arguments for the Dataflow runner"
+        mainSteps:
+        - name: runDataflowPipeline
+          action: aws:runCommand
+          inputs:
+            DocumentName: !Ref DataflowRunnerCommandDocument
+            Targets:
+              - Key: "tag:Name"
+                Values:
+                  - !Sub "AppScale ${RunnerLabel} Dataflow Runner"
+            Parameters:
+              target:
+                - "{{ target }}"
+              classpath:
+                - "{{ classpath }}"
+              main:
+                - "{{ main }}"
+              project:
+                - "{{ project }}"
+              arguments:
+                - "{{ arguments }}"
+            CloudWatchOutputConfig:
+              CloudWatchLogGroupName: !Ref DataflowRunnerLogGroup
+              CloudWatchOutputEnabled: true
+          isEnd: true
+#   DataflowDeployEventRule:
+#     Type: "AWS::Events::Rule"
+#     Properties:
+#       Description: "Deploy dataflow pipeline"
+#       EventPattern:
+#         source:
+#           - "aws.s3"
+#         detail-type:
+#           - "AWS API Call via CloudTrail"
+#         detail:
+#           eventSource:
+#             - "s3.amazonaws.com"
+#           eventName:
+#             - "CompleteMultipartUpload"
+#             - "PutObject"
+#           resources:
+#             ARN:
+#               - !Sub "arn:aws:s3:::${S3BucketName}/${S3DeployPipelinePath}"
+#       Targets:
+#         - Arn: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:document/${DataflowDeployAutomationDocument}"
+#           Id: deployDataflowPipelineTarget
+#           RoleArn: !GetAtt DataflowAutomationRole.Arn
+
