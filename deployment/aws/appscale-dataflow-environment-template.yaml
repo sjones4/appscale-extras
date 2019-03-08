@@ -109,6 +109,8 @@ Resources:
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       Tags:
         - Key: Name
           Value: !Sub AppScale Cloud Storage Bucket
@@ -160,7 +162,7 @@ Resources:
   DataflowRunnerRole:
     Type: "AWS::IAM::Role"
     Properties:
-      Path: /appscale/
+      Path: "/appscale/dataflow/"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -171,6 +173,20 @@ Resources:
                 - "ec2.amazonaws.com"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+      Policies:
+        - PolicyName: "DataflowRunnerS3Read"
+          PolicyDocument:
+            Version: "2012-10-17",
+            Statement:
+              - Effect: "Allow"
+                Action: "s3:ListAllMyBuckets"
+                Resource: "*"
+              - Effect: "Allow"
+                Action: "s3:ListBucket"
+                Resource: !Sub "arn:aws:s3:::${BucketName}"
+              - Effect": "Allow"
+                Action": "s3:GetObject"
+                Resource": !Sub "arn:aws:s3:::${BucketName}/*"
   DataflowRunnerInstanceProfile:
     Type: "AWS::IAM::InstanceProfile"
     Properties:

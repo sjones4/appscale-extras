@@ -82,10 +82,17 @@ Resources:
         Fn::Base64: !Sub |
           #cloud-config
           packages:
+           - awscli
            - docker-compose
            - git
            - openssl
           write_files:
+           - path: /root/.aws/config
+             owner: "root:root"
+             permissions: "0600"
+             content: |
+               [default]
+               region = ${AWS::Region}
            - path: /root/bin/repo_setup.sh
              owner: "root:root"
              permissions: "0755"
