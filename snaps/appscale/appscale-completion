@@ -1,0 +1,46 @@
+_appscale()
+{
+    local cur prev
+
+    cur=${COMP_WORDS[COMP_CWORD]}
+    prev=${COMP_WORDS[COMP_CWORD-1]}
+
+    case "${COMP_CWORD}" in
+        1)
+            COMPREPLY=($(compgen -W "deploy create-user down get init logs register relocate remove services set ssh stats status tail up undeploy upgrade help" -- ${cur}))
+            ;;
+        2)
+            case ${prev} in
+                deploy)
+                    COMPREPLY=($(compgen -W "--project" -- ${cur}))
+                    ;;
+                down)
+                    COMPREPLY=($(compgen -W "--clean --terminate" -- ${cur}))
+                    ;;
+                init)
+                    COMPREPLY=($(compgen -W "cloud cluster" -- ${cur}))
+                    ;;
+                services)
+                    COMPREPLY=($(compgen -W "delete start stop" -- ${cur}))
+                    ;;
+                stats)
+                    COMPREPLY=($(compgen -W "--apps-only --order-processes --roles --top --types --verbose" -- ${cur}))
+                    ;;
+                status)
+                    COMPREPLY=($(compgen -W "--verbose" -- ${cur}))
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            ;;
+        *)
+            COMPREPLY=()
+            ;;
+    esac
+
+    return 0
+}
+
+complete -F _appscale appscale
+

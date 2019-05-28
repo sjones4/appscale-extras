@@ -1,0 +1,61 @@
+---
+name: appscale
+version: '3.7.1-1'
+confinement: strict
+grade: stable
+base: core18
+icon: appscale_icon.png
+summary: AppScale client tools for use with your appscale deployment
+description: |
+  AppScale command line interface for management of AppScale deployments.
+
+  AppScale is an easy-to-manage serverless platform for building and
+  running scalable web and mobile applications on any infrastructure.
+
+apps:
+  appscale:
+    command: usr/local/bin/appscale
+    completer: appscale-completion
+    plugs:
+      - home
+      - network
+
+layout:
+  # Application
+  /usr/bin/appscale:
+    symlink: $SNAP/usr/local/bin/appscale
+  # Python
+  /etc/python2.7:
+    bind: $SNAP/etc/python2.7
+  /lib/python2.7:
+    bind: $SNAP/lib/python2.7
+  /usr/bin/python:
+    symlink: $SNAP/usr/bin/python2.7
+  /usr/bin/python2:
+    symlink: $SNAP/usr/bin/python2.7
+  /usr/bin/python2.7:
+    symlink: $SNAP/usr/bin/python2.7
+  /usr/lib/python2.7:
+    bind: $SNAP/usr/lib/python2.7
+  /usr/share/python:
+    bind: $SNAP/usr/share/python
+
+parts:
+  appscale-snap:
+    plugin: dump
+    source: ./
+  appscale-base:
+    plugin: nil
+    stage-packages:
+      - openssh-client
+  appscale-tools:
+    plugin: python
+    python-version: python2
+    source: https://github.com/appscale/appscale-tools.git
+    source-type: git
+    source-depth: 1
+    source-tag: 3.7.1
+    override-build: |
+      snapcraftctl build
+      debian/appscale_build.sh
+
