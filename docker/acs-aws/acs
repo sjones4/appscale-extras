@@ -1,0 +1,32 @@
+#!/bin/bash
+# Sync/generate credentials and launch AppScale Cloud Storage service
+
+# Check environment
+: ${APPSCALE_CLOUD_STORAGE_CREDS:?Credentials storage s3 path is required}
+: ${APPSCALE_CLOUD_STORAGE_REGION:?Region is required}
+
+# Handle credentials
+CREDS_DIR="/var/lib/appscale/service-credentials"
+[ -d "${CREDS_DIR}" ] || mkdir -pv "${CREDS_DIR}"
+AWS_S3="aws ${APPSCALE_CLOUD_STORAGE_AWSCLI_S3_OPTS} s3"
+pushd "${CREDS_DIR}"
+${AWS_S3} sync --no-progress "${APPSCALE_CLOUD_STORAGE_CREDS}" ./
+if [ -n "${APPSCALE_CLOUD_STORAGE_APP_SRV_ACCOUNT}" ] ; then
+  if [ ! -f "${APPSCALE_CLOUD_STORAGE_APP_ID}.json" ] ; then
+    /opt/appscale-cloud-storage/generate_credentials.sh \
+      ${APPSCALE_CLOUD_STORAGE_APP_SRV_ACCOUNT} \
+      ${APPSCALE_CLOUD_STORAGE_APP_ID}@appscale.internal
+
+    ${AWS_S3} sync --no-progress  . "${APPSCALE_CLOUD_STORAGE_CREDS}"
+  fi
+fi
+popd
+
+# Update configuration
+/opt/appscale-cloud-storage/generate_config.sh
+
+# Initialize database
+appscale-prime-cloud-storage
+
+# Run AppScale Cloud Storage with log output to console
+exec flask run --host="${APPSCALE_CLOUD_STORAGE_HOST:-0.0.0.0}"
