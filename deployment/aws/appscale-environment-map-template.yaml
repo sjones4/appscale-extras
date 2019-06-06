@@ -1,0 +1,64 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Mapping environment for AppScale deployment to existing VPC
+Parameters:
+  InternetGateway:
+    Type: String
+    Description: Internet gateway identifier
+    AllowedPattern: '^igw-[a-z0-9]+$'
+  RouteTable:
+    Type: String
+    Description: Route table identifier
+    AllowedPattern: '^rtb-[a-z0-9]+$'
+  Subnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet identifier
+  Vpc:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC identifier
+  VpcCidr:
+    Type: String
+    Description: VPC cidr
+    AllowedPattern: '^((\d{1,3})\.){3}\d{1,3}/\d{1,2}$'
+  Zone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: Availability zone
+Conditions:
+  CreateResource: !Equals [ 'False', 'True' ]
+Resources:
+  Resource:
+    Type: AWS::EC2::EIP
+    Condition: CreateResource
+Outputs:
+  VPC:
+    Description: VPCId for the AppScale VPC
+    Value: !Ref Vpc
+    Export:
+      Name: AppScaleVpcId
+  VPCCidr:
+    Description: VPC CIDR for the AppScale VPC
+    Value: !Ref VpcCidr
+    Export:
+      Name: AppScaleVpcCidr
+  PublicSubnet:
+    Description: SubnetId for the AppScale public subnet
+    Value: !Ref Subnet
+    Export:
+      Name: AppScalePublicSubnetId
+  PublicSubnetZone:
+    Description: Availability zone of the AppScale public subnet
+    Value: !Ref Zone
+    Export:
+      Name: AppScalePublicSubnetZone
+  PublicRouteTable:
+    Description: RouteTableId for the AppScale public routes
+    Value: !Ref RouteTable
+    Export:
+      Name: AppScalePublicRouteTableId
+  Gateway:
+    Description: GatewayId for the AppScale internet gateway
+    Value: !Ref InternetGateway
+    Export:
+      Name: AppScaleGatewayId
+
