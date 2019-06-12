@@ -1,0 +1,24 @@
+#!/bin/bash
+# Perform AppScale Cloud Storage service clean up
+
+# Handle credentials
+CREDS_DIR="/var/lib/appscale/service-credentials"
+[ -d "${CREDS_DIR}" ] || mkdir -pv "${CREDS_DIR}"
+
+# Update configuration
+/opt/appscale-cloud-storage/generate_config.sh
+
+# Wait for database to become available
+until PGPASSWORD=${APPSCALE_CLOUD_STORAGE_DB_PASS:-changeme} psql \
+    --host="${APPSCALE_CLOUD_STORAGE_DB_HOST:-postgres}" \
+    --username="${APPSCALE_CLOUD_STORAGE_DB_USER:-postgres}" \
+    --command='\q'; do
+  >&2 echo "Postgres is unavailable - sleeping"
+  sleep 5
+done
+
+# Initialize database
+appscale-cloud-storage-prime
+
+# Perform clean up
+appscale-cloud-storage-clean
