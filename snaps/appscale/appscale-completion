@@ -12,13 +12,17 @@ _appscale()
         2)
             case ${prev} in
                 deploy)
-                    COMPREPLY=($(compgen -W "--project" -- ${cur}))
-                    ;;
-                down)
-                    COMPREPLY=($(compgen -W "--clean --terminate" -- ${cur}))
+                    if [ "${cur:0:1}" == "-" ] ; then
+                        COMPREPLY=($(compgen -W "--project" -- ${cur}))
+                    else
+                        COMPREPLY=($(compgen -f -o plusdirs -X '!*.@(tar.gz|yaml|zip)' -- ${cur}))
+                    fi
                     ;;
                 init)
                     COMPREPLY=($(compgen -W "cloud cluster" -- ${cur}))
+                    ;;
+                logs)
+                    COMPREPLY=($(compgen -d -- ${cur}))
                     ;;
                 services)
                     COMPREPLY=($(compgen -W "delete start stop" -- ${cur}))
