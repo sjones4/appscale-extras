@@ -25,8 +25,25 @@ popd
 # Update configuration
 /opt/appscale-cloud-storage/generate_config.sh
 
+# Wait for database to become available
+until PGPASSWORD=${APPSCALE_CLOUD_STORAGE_DB_PASS:-changeme} psql \
+    --host="${APPSCALE_CLOUD_STORAGE_DB_HOST:-postgres}" \
+    --username="${APPSCALE_CLOUD_STORAGE_DB_USER:-postgres}" \
+    --command='\q'; do
+  >&2 echo "Postgres is unavailable - sleeping"
+  sleep 5
+done
+
 # Initialize database
-appscale-prime-cloud-storage
+appscale-cloud-storage-prime
+
+# Link default bucket to application
+if [ -n "${APPSCALE_CLOUD_STORAGE_APP_ID:-}" ] &&
+   [ -n "${APPSCALE_CLOUD_STORAGE_APP_BUCKET:-}" ] ; then
+  appscale-cloud-storage-link \
+    --bucket "${APPSCALE_CLOUD_STORAGE_APP_BUCKET}" \
+    --project "${APPSCALE_CLOUD_STORAGE_APP_ID}"
+fi
 
 # Run AppScale Cloud Storage with log output to console
 exec flask run --host="${APPSCALE_CLOUD_STORAGE_HOST:-0.0.0.0}"
