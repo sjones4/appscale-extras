@@ -61,4 +61,9 @@ Outputs:
     Value: !Ref InternetGateway
     Export:
       Name: AppScaleGatewayId
+  RepositoryPrefix:
+    Description: Image name prefix for AppScale ECR repositories
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/appscale"
+    Export:
+      Name: AppScaleRepositoryPrefix
 

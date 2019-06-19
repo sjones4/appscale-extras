@@ -1,0 +1,206 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AppScale Cloud Storage ECR (initial) image load, requires
+  cloudstorage-environment.
+Parameters:
+  PublicIps:
+    Description: Run ECR services with public IP assigned
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - DISABLED
+      - ENABLED
+  SourceRepositoryPrefix:
+    Description: Docker repository prefix for images
+    Type: String
+    Default: sjones4-docker-registry.bintray.io/appscale
+Resources:
+  CloudStorageEcrInitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /appscale/
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+  CloudStorageEcrInitWaitConditionHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+  CloudStorageEcrInitWaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    Properties:
+      Handle: !Ref CloudStorageEcrInitWaitConditionHandle
+      Timeout: 900
+  CloudStorageEcrInitSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for cloud storage ecr init task
+      VpcId: !ImportValue AppScaleVpcId
+      Tags:
+        - Key: Name
+          Value: AppScale Cloud Storage ECR init group
+  CloudStorageEcrInitTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Cpu: 256
+      Memory: 512
+      Family: AppScaleEcrInit
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !ImportValue AppScaleCloudStorageExecutionRole
+      TaskRoleArn: !GetAtt CloudStorageEcrInitRole.Arn
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: ecr-init
+          Image: !Sub "${SourceRepositoryPrefix}/ecr-init:latest"
+          Environment:
+            - Name: ECR_INIT_PREFIX
+              Value: !ImportValue AppScaleRepositoryPrefix
+            - Name: ECR_INIT_WAIT_COND_URL
+              Value: !Ref CloudStorageEcrInitWaitConditionHandle
+            - Name: ECR_INIT_IMAGE_1
+              Value: !Sub "${SourceRepositoryPrefix}/acs-aws:latest"
+            - Name: ECR_INIT_IMAGE_2
+              Value: !Sub "${SourceRepositoryPrefix}/postgres:10.7-alpine"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /appscale/storage
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecr-init
+  CloudStorageEcrInitLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/appscale/"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: appscale-cloud-storage-ecr-init
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource:
+                  - !Ref CloudStorageEcrInitTask
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt CloudStorageEcrInitRole.Arn
+                  - !ImportValue AppScaleCloudStorageExecutionRole
+  CloudStorageEcrInitFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          Fn::Sub:
+            - |
+              import boto3
+              import json
+              import logging
+              import urllib3
+
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+
+              def handler(event, context):
+                logger.info('Called with: ' + str(event))
+                try:
+                  status = 'SUCCESS'
+                  reason = ''
+                  data = None
+                  if event['RequestType'] == 'Create':
+                    data = handle_create(event, context)
+                    reason = 'Resource create successful'
+                  elif event['RequestType'] == 'Update':
+                    data = handle_update(event, context)
+                    reason = 'Resource update successful'
+                  elif event['RequestType'] == 'Delete':
+                    data = handle_delete(event, context)
+                    reason = 'Resource delete successful'
+                  else:
+                    status = 'FAILED'
+                    reason = 'Invalid event type: ' + event['RequestType']
+                except e:
+                  logger.warning('Error: %s', str(e))
+                  status = 'FAILED'
+                  reason = 'Error: ' + str(e)
+                finally:
+                  send_response(event, context, status, reason, data)
+
+              def handle_create(event, context):
+                logger.info('Handling create')
+                ecs = boto3.client('ecs')
+                ecs.run_task(cluster='${Cluster}',
+                             count=1,
+                             launchType='FARGATE',
+                             networkConfiguration={
+                                 'awsvpcConfiguration': {
+                                     'assignPublicIp': '${AssignPublicIp}',
+                                     'securityGroups': ['${SecurityGroup}'],
+                                     'subnets': ['${Subnet}']
+                                 }
+                             },
+                             taskDefinition='${Task}')
+
+              def handle_update(event, context):
+                logger.info('Handling update')
+
+              def handle_delete(event, context):
+                logger.info('Handling delete')
+
+              def send_response(event, context, status, reason, data=None):
+                physical_id = event['StackId'] + '/' + event['LogicalResourceId']
+                body = json.dumps({
+                                  'Status': status,
+                                  'Reason': reason,
+                                  'PhysicalResourceId': physical_id,
+                                  'StackId': event['StackId'],
+                                  'RequestId': event['RequestId'],
+                                  'LogicalResourceId': event['LogicalResourceId'],
+                                  'Data': data or {}})
+                http = urllib3.PoolManager(cert_reqs='CERT_REQUIRED',
+                                           ca_certs='/etc/ssl/certs/ca-bundle.trust.crt')
+                logger.info('Responding with: ' + body)
+                try:
+                  http.request('PUT', event['ResponseURL'],
+                               headers={'Content-Type': '',
+                                        'Content-Length': len(body)},
+                               body=body)
+                except e:
+                  logger.warning('Response error: %s', str(e))
+            - AssignPublicIp: !Ref PublicIps
+              Cluster: !ImportValue AppScaleCloudStorageCluster
+              SecurityGroup: !Ref CloudStorageEcrInitSecurityGroup
+              Subnet: !ImportValue AppScalePublicSubnetId
+              Task: !Ref CloudStorageEcrInitTask
+      Description: Run ECS task for ECR registry initialization
+      Handler: index.handler
+      Role: !GetAtt CloudStorageEcrInitLambdaRole.Arn
+      Runtime: python3.7
+      Timeout: 15
+  CloudStorageEcrInitFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CloudStorageEcrInitFunction}"
+      RetentionInDays: 1
+  CloudStorageEcrInit:
+    Type: Custom::CloudStorageEcrInit
+    DependsOn: CloudStorageEcrInitFunctionLogGroup
+    Properties:
+      ServiceToken: !GetAtt CloudStorageEcrInitFunction.Arn
+

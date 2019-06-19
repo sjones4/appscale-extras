@@ -1,0 +1,270 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AppScale Cloud Storage deployment template, requires cloudstorage-environment
+Parameters:
+  Project:
+    Description: The Google Cloud Platform project that will use GCS
+    Type: String
+    AllowedPattern: "[a-z0-9-]{2,32}"
+  ServiceAccount:
+    Description: >-
+      Service account metadata [COUNTYCODE(2) STATE/REGION(2) CITY(2-64)
+      NAME(2-64)]
+    Type: String
+    AllowedPattern: "[A-Z]{2} [A-Z]{2} [A-Za-z]{2,64} [A-Za-z0-9-]{2,64}"
+Resources:
+  CloudStorageAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !ImportValue AppScaleCloudStorageUser
+  CloudStoragePostgresDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: postgres
+      NamespaceId: !ImportValue AppScaleNamespace
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 60
+      HealthCheckCustomConfig:
+        FailureThreshold: 2
+  CloudStorageServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: storage
+      NamespaceId: !ImportValue AppScaleNamespace
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 60
+      HealthCheckCustomConfig:
+        FailureThreshold: 2
+  CloudStorageCleanScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: AppScale cloud storage periodic clean up
+      ScheduleExpression: "cron(0 0/6 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CloudStorageCleanLambdaFunction.Arn
+          Id: appscale-cloud-storage-cleanup
+  CloudStorageCleanLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CloudStorageCleanLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CloudStorageCleanScheduledRule.Arn
+  CloudStoragePostgresTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Cpu: 256
+      Memory: 512
+      Family: AppScalePostgres
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !ImportValue AppScaleCloudStorageExecutionRole
+      TaskRoleArn: !ImportValue AppScaleCloudStorageRole
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: postgres
+          Image:
+            Fn::Sub:
+              - "${Prefix}/postgres:10.7-alpine"
+              - Prefix: !ImportValue AppScaleRepositoryPrefix
+          Environment:
+            - Name: POSTGRES_PASSWORD
+              Value: changeme
+            - Name: PGDATA
+              Value: /var/lib/postgresql/data/pgdata
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /appscale/storage
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: postgres
+          PortMappings:
+            - ContainerPort: 5432
+  CloudStorageServiceTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Cpu: 256
+      Memory: 512
+      Family: AppScaleStorage
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !ImportValue AppScaleCloudStorageExecutionRole
+      TaskRoleArn: !ImportValue AppScaleCloudStorageRole
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: storage
+          Image:
+            Fn::Sub:
+              - "${Prefix}/acs-aws:latest"
+              - Prefix: !ImportValue AppScaleRepositoryPrefix
+          Environment:
+            - Name: APPSCALE_CLOUD_STORAGE_DB_HOST
+              Value: postgres.appscale.internal
+            - Name: APPSCALE_CLOUD_STORAGE_REGION
+              Value: !Ref AWS::Region
+            - Name: APPSCALE_CLOUD_STORAGE_APP_SRV_ACCOUNT
+              Value: !Ref ServiceAccount
+            - Name: APPSCALE_CLOUD_STORAGE_APP_ID
+              Value: !Ref Project
+            - Name: APPSCALE_CLOUD_STORAGE_APP_BUCKET
+              Value: !ImportValue AppScaleCloudStorageAppBucket
+            - Name: APPSCALE_CLOUD_STORAGE_CREDS
+              Value:
+                Fn::Sub:
+                  - s3://${Bucket}/creds/
+                  - Bucket: !ImportValue AppScaleCloudStorageConfigBucket
+            - Name: APPSCALE_CLOUD_STORAGE_ACCESS_KEY
+              Value: !Ref CloudStorageAccessKey
+            - Name: APPSCALE_CLOUD_STORAGE_SECRET_KEY
+              Value: !GetAtt CloudStorageAccessKey.SecretAccessKey
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /appscale/storage
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: storage
+          PortMappings:
+            - ContainerPort: 5000
+  CloudStorageCleanServiceTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Cpu: 256
+      Memory: 512
+      Family: AppScaleStorageClean
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !ImportValue AppScaleCloudStorageExecutionRole
+      TaskRoleArn: !ImportValue AppScaleCloudStorageRole
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: storage-cleanup
+          Image:
+            Fn::Sub:
+              - "${Prefix}/acs-aws:latest"
+              - Prefix: !ImportValue AppScaleRepositoryPrefix
+          Command:
+            - /opt/appscale-cloud-storage/acs-clean
+          Environment:
+            - Name: APPSCALE_CLOUD_STORAGE_DB_HOST
+              Value: postgres.appscale.internal
+            - Name: APPSCALE_CLOUD_STORAGE_REGION
+              Value: !Ref AWS::Region
+            - Name: APPSCALE_CLOUD_STORAGE_APP_SRV_ACCOUNT
+              Value: US CA SB example
+            - Name: APPSCALE_CLOUD_STORAGE_APP_ID
+              Value: example
+            - Name: APPSCALE_CLOUD_STORAGE_APP_BUCKET
+              Value: !ImportValue AppScaleCloudStorageAppBucket
+            - Name: APPSCALE_CLOUD_STORAGE_CREDS
+              Value:
+                Fn::Sub:
+                  - s3://${Bucket}/creds/
+                  - Bucket: !ImportValue AppScaleCloudStorageConfigBucket
+            - Name: APPSCALE_CLOUD_STORAGE_ACCESS_KEY
+              Value: configured_but_not_used
+            - Name: APPSCALE_CLOUD_STORAGE_SECRET_KEY
+              Value: configured_but_not_used
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /appscale/storage
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: storage-clean
+  CloudStoragePostgresService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !ImportValue AppScaleCloudStorageCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !ImportValue AppScaleCloudStorageSecurityGroup
+          Subnets:
+            - !ImportValue AppScalePublicSubnetId
+      ServiceName: postgres
+      ServiceRegistries:
+        - RegistryArn: !GetAtt CloudStoragePostgresDiscovery.Arn
+      TaskDefinition: !Ref CloudStoragePostgresTask
+  CloudStorageService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !ImportValue AppScaleCloudStorageCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !ImportValue AppScaleCloudStorageSecurityGroup
+          Subnets:
+            - !ImportValue AppScalePublicSubnetId
+      ServiceName: storage
+      ServiceRegistries:
+        - RegistryArn: !GetAtt CloudStorageServiceDiscovery.Arn
+      TaskDefinition: !Ref CloudStorageServiceTask
+  CloudStorageCleanLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/appscale/"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: appscale-cloud-storage-run-clean
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource:
+                  - !Ref CloudStorageCleanServiceTask
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !ImportValue AppScaleCloudStorageRole
+                  - !ImportValue AppScaleCloudStorageExecutionRole
+  CloudStorageCleanLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          Fn::Sub:
+            - |
+              import boto3
+              def handler(event, context):
+                  ecs = boto3.client('ecs')
+                  ecs.run_task(cluster='${Cluster}',
+                               count=1,
+                               launchType='FARGATE',
+                               networkConfiguration={
+                                   'awsvpcConfiguration': {
+                                       'assignPublicIp': 'ENABLED',
+                                       'securityGroups': ['${SecurityGroup}'],
+                                       'subnets': ['${Subnet}']
+                                   }
+                               },
+                               taskDefinition='${Task}')
+            - Cluster: !ImportValue AppScaleCloudStorageCluster
+              SecurityGroup: !ImportValue AppScaleCloudStorageSecurityGroup
+              Subnet: !ImportValue AppScalePublicSubnetId
+              Task: !Ref CloudStorageCleanServiceTask
+      Description: Lambda function.
+      FunctionName: lambda_function
+      Handler: index.handler
+      Role: !GetAtt CloudStorageCleanLambdaRole.Arn
+      Runtime: python3.7
+      Timeout: 15
+
