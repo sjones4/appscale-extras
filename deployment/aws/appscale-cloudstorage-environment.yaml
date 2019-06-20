@@ -1,0 +1,334 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AppScale Cloud Storage environment template, requires environment.
+Parameters:
+  AppBucketName:
+    Description: S3 bucket used for applications default
+    Type: String
+  ConfigBucketName:
+    Description: S3 bucket used for Appscale Cloud Storage configuration
+    Type: String
+  CreateBuckets:
+    Description: S3 bucket create or use existing
+    Type: String
+    Default: "Yes"
+    AllowedValues: ["Yes", "No"]
+  CreateRepositories:
+    Description: ECR repository create or use existing
+    Type: String
+    Default: "Yes"
+    AllowedValues: ["Yes", "No"]
+  LogRetentionDays:
+    Description: Number of days to keep Appscale Cloud Storage logs
+    Type: Number
+    Default: 7
+    AllowedValues: [
+      1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731,
+      1827, 3653
+    ]
+Conditions:
+  CreateBuckets:
+    "Fn::Equals":
+      - !Ref CreateBuckets
+      - "Yes"
+  CreateRepositories:
+    "Fn::Equals":
+      - !Ref CreateRepositories
+      - "Yes"
+Resources:
+  CloudStorageAppBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateBuckets
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref AppBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: AppScale Cloud Storage application default bucket
+  CloudStorageConfigBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateBuckets
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref ConfigBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: AppScale Cloud Storage configuration bucket
+  CloudStorageAppBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AppBucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: s3:GetObject
+            Principal: '*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${AppBucketName}/*'
+            Condition:
+              StringEquals:
+                'aws:sourceVpce': !Ref CloudStorageS3Endpoint
+  AppScaleAcsRepository:
+    Type: AWS::ECR::Repository
+    Condition: CreateRepositories
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: appscale/acs-aws
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire all but one untagged image",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 1
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+  AppScalePostgresRepository:
+    Type: AWS::ECR::Repository
+    Condition: CreateRepositories
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: appscale/postgres
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire all but one untagged image",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 1
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+  CloudStorageUser:
+    Type: AWS::IAM::User
+    Properties:
+      Path: /appscale/
+  CloudStorageRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/appscale/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "ecs-tasks.amazonaws.com"
+  CloudStoragePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: "CloudStorageS3"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - "s3:GetBucketLocation"
+              - "s3:GetBucketTagging"
+              - "s3:GetBucketVersioning"
+              - "s3:HeadBucket"
+              - "s3:ListAllMyBuckets"
+              - "s3:ListBucket"
+              - "s3:ListBucketByTags"
+              - "s3:ListBucketMultipartUploads"
+              - "s3:ListBucketVersions"
+            Resource: "*"
+            Effect: "Allow"
+          - Action:
+              - "s3:AbortMultipartUpload"
+              - "s3:DeleteObject"
+              - "s3:DeleteObjectTagging"
+              - "s3:DeleteObjectVersion"
+              - "s3:DeleteObjectVersionTagging"
+              - "s3:GetObject"
+              - "s3:GetObjectAcl"
+              - "s3:GetObjectTagging"
+              - "s3:GetObjectTorrent"
+              - "s3:GetObjectVersion"
+              - "s3:GetObjectVersionAcl"
+              - "s3:GetObjectVersionForReplication"
+              - "s3:GetObjectVersionTagging"
+              - "s3:GetObjectVersionTorrent"
+              - "s3:ListMultipartUploadParts"
+              - "s3:PutObject"
+              - "s3:PutObjectAcl"
+              - "s3:PutObjectTagging"
+              - "s3:PutObjectVersionAcl"
+              - "s3:PutObjectVersionTagging"
+              - "s3:RestoreObject"
+            Resource: "arn:aws:s3:::*/*"
+            Effect: "Allow"
+      Users:
+        - !Ref CloudStorageUser
+      Roles:
+        - !Ref CloudStorageRole
+  CloudStorageExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/appscale/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "ecs-tasks.amazonaws.com"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  CloudStorageSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for cloud storage tasks
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !ImportValue AppScaleVpcCidr
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: !ImportValue AppScaleVpcCidr
+      Tags:
+        - Key: Name
+          Value: AppScale Cloud Storage Group
+  CloudStorageEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for cloud storage VPC endpoints
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue AppScaleVpcCidr
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !ImportValue AppScaleVpcCidr
+      Tags:
+        - Key: Name
+          Value: AppScale Cloud Storage VPC endpoints group
+  CloudStorageS3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !ImportValue AppScaleVpcId
+      RouteTableIds:
+        - !ImportValue AppScalePublicRouteTableId
+  CloudStorageEcrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      PrivateDnsEnabled: true
+      VpcId: !ImportValue AppScaleVpcId
+      SubnetIds:
+        - !ImportValue AppScalePublicSubnetId
+      SecurityGroupIds:
+        - !Ref CloudStorageEndpointSecurityGroup
+  CloudStorageLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      VpcId: !ImportValue AppScaleVpcId
+      SubnetIds:
+        - !ImportValue AppScalePublicSubnetId
+      SecurityGroupIds:
+        - !Ref CloudStorageEndpointSecurityGroup
+  CloudStorageNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Description: AppScale Service Discovery Namespace
+      Name: appscale.internal
+      Vpc: !ImportValue AppScaleVpcId
+  CloudStorageServiceLinkedRole:
+    Type: AWS::IAM::ServiceLinkedRole
+    Properties:
+      AWSServiceName: ecs.amazonaws.com
+  CloudStorageCluster:
+    Type: AWS::ECS::Cluster
+    DependsOn: CloudStorageServiceLinkedRole
+    Properties:
+      ClusterName: AppScaleCloudStorageCluster
+  CloudStorageLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /appscale/storage
+      RetentionInDays: !Ref LogRetentionDays
+Outputs:
+  CloudStorageAppBucket:
+    Description: S3 application default bucket for AppScale Cloud Storage
+    Value: !Ref AppBucketName
+    Export:
+      Name: AppScaleCloudStorageAppBucket
+  CloudStorageConfigBucket:
+    Description: S3 bucket used with AppScale Cloud Storage
+    Value: !Ref ConfigBucketName
+    Export:
+      Name: AppScaleCloudStorageConfigBucket
+  CloudStorageUser:
+    Description: IAM user used with AppScale Cloud Storage
+    Value: !Ref CloudStorageUser
+    Export:
+      Name: AppScaleCloudStorageUser
+  CloudStorageRole:
+    Description: IAM role used with AppScale Cloud Storage
+    Value: !GetAtt CloudStorageRole.Arn
+    Export:
+      Name: AppScaleCloudStorageRole
+  CloudStorageExecutionRole:
+    Description: IAM role used with AppScale Cloud Storage task execution
+    Value: !GetAtt CloudStorageExecutionRole.Arn
+    Export:
+      Name: AppScaleCloudStorageExecutionRole
+  CloudStorageSecurityGroup:
+    Description: Security group for AppScale Cloud Storage
+    Value: !Ref CloudStorageSecurityGroup
+    Export:
+      Name: AppScaleCloudStorageSecurityGroup
+  CloudStorageNamespace:
+    Description: Service discovery namespace for AppScale Cloud Storage
+    Value: !Ref CloudStorageNamespace
+    Export:
+      Name: AppScaleNamespace
+  CloudStorageCluster:
+    Description: ECS cluster for AppScale Cloud Storage
+    Value: !Ref CloudStorageCluster
+    Export:
+      Name: AppScaleCloudStorageCluster
+
