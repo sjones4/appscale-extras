@@ -5,9 +5,9 @@ RUN mkdir -pv /appscale/site-packages \
  && apt-get --assume-yes update \
  && apt-get --assume-yes install swig \
  && cd /root \
- && wget https://www.foundationdb.org/downloads/6.1.8/ubuntu/installers/foundationdb-clients_6.1.8-1_amd64.deb \
+ && wget --no-verbose https://www.foundationdb.org/downloads/6.1.8/ubuntu/installers/foundationdb-clients_6.1.8-1_amd64.deb \
  && dpkg --install foundationdb-clients_6.1.8-1_amd64.deb \
- && git clone --depth 1 https://github.com/appscale/appscale.git \
+ && git clone --quiet https://github.com/appscale/appscale.git \
  && cd /root/appscale \
  && git checkout e9c6b8693eb388b5652cef481351306533a494fa \
  && pip install --target /appscale/site-packages ./common ./AppDB foundationdb==6.1.8 \
