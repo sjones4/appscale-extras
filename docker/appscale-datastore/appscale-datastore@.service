@@ -1,0 +1,27 @@
+[Unit]
+Description=AppScale Datastore on Port %I
+AssertPathExists=/etc/appscale/load_balancer_ips
+AssertPathExists=/etc/appscale/my_private_ip
+AssertPathExists=/etc/appscale/zookeeper_locations
+AssertPathExists=/etc/foundationdb/fdb.cluster
+Wants=foundationdb.service
+After=foundationdb.service network-online.target time-sync.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/podman rm --force "appscale-datastore-%i"
+ExecStart=/usr/bin/podman run --name "appscale-datastore-%i" --volume /etc/appscale:/etc/appscale --volume /etc/foundationdb:/etc/foundationdb --publish %i:4000 sjones4/appscale-datastore:lastest
+ExecStop=-/usr/bin/podman stop "appscale-datastore-%i"
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=process
+Restart=on-failure
+RestartSec=10
+SyslogIdentifier=datastore-%i
+# Security
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+
