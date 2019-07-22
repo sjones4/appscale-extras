@@ -10,7 +10,7 @@ After=foundationdb.service network-online.target time-sync.target
 [Service]
 Type=simple
 ExecStartPre=-/usr/bin/podman rm --force "appscale-datastore-%i"
-ExecStart=/usr/bin/podman run --name "appscale-datastore-%i" --volume /etc/appscale:/etc/appscale --volume /etc/foundationdb:/etc/foundationdb --publish %i:4000 sjones4/appscale-datastore:lastest
+ExecStart=/usr/bin/podman run --name "appscale-datastore-%i" --volume /etc/appscale:/etc/appscale --volume /etc/foundationdb:/etc/foundationdb --publish %i:4000 sjones4/appscale-fdb-datastore:lastest
 ExecStop=-/usr/bin/podman stop "appscale-datastore-%i"
 TimeoutStartSec=60
 TimeoutStopSec=30
