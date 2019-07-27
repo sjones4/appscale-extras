@@ -20,7 +20,7 @@ FROM python:2.7-slim-stretch
 ENV HOME=/appscale \
     APPSCALE_HOME=/appscale \
     PYTHONPATH=/appscale/site-packages \
-    PATH=$PATH:$PYTHONPATH/bin
+    PATH=$PATH:/appscale/site-packages/bin
 
 COPY --from=build-env /appscale/site-packages /appscale/site-packages
 COPY --from=build-env /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
