@@ -1,0 +1,23 @@
+[Unit]
+Description=Run AppScale datastore groomer once
+AssertPathExists=/etc/appscale/load_balancer_ips
+AssertPathExists=/etc/appscale/my_private_ip
+AssertPathExists=/etc/appscale/zookeeper_locations
+AssertPathExists=/etc/foundationdb/fdb.cluster
+Wants=appscale-datastore-groomer.timer foundationdb.service
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/bin/podman create --name "appscale-datastore-groomer" --conmon-pidfile /run/appscale-datastore-groomer.pid --volume /etc/appscale --volume /etc/foundationdb docker.io/sjones4/appscale-fdb-datastore:latest appscale-groomer
+ExecStart=/usr/bin/podman start --attach "appscale-datastore-groomer"
+ExecStop=-/usr/bin/podman stop --timeout 25 "appscale-datastore-groomer"
+TimeoutStartSec=60
+TimeoutStopSec=30
+PIDFile=/run/appscale-datastore-groomer.pid
+SyslogIdentifier=datastore-groomer
+# Security
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

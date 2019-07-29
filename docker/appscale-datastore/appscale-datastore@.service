@@ -9,14 +9,14 @@ After=foundationdb.service network-online.target time-sync.target
 
 [Service]
 Type=simple
-ExecStartPre=-/usr/bin/podman rm --force "appscale-datastore-%i"
-ExecStart=/usr/bin/podman run --name "appscale-datastore-%i" --volume /etc/appscale:/etc/appscale --volume /etc/foundationdb:/etc/foundationdb --publish %i:4000 sjones4/appscale-fdb-datastore:lastest
-ExecStop=-/usr/bin/podman stop "appscale-datastore-%i"
+ExecStartPre=-/usr/bin/podman create --name "appscale-datastore-%i" --conmon-pidfile /run/appscale-datastore-%i.pid --volume /etc/appscale --volume /etc/foundationdb --publish %i:%i docker.io/sjones4/appscale-fdb-datastore:latest appscale-datastore --type fdb --port %i
+ExecStart=/usr/bin/podman start --attach "appscale-datastore-%i"
+ExecStop=-/usr/bin/podman stop --timeout 25 "appscale-datastore-%i"
 TimeoutStartSec=60
 TimeoutStopSec=30
-KillMode=process
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+PIDFile=/run/appscale-datastore-%i.pid
 SyslogIdentifier=datastore-%i
 # Security
 PrivateTmp=true

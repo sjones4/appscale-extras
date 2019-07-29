@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AppScale datastore groomer hourly
+Requires=appscale-datastore-groomer.service
+
+[Timer]
+Unit=appscale-datastore-groomer.service
+OnUnitInactiveSec=1h
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
