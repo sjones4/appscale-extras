@@ -9,7 +9,7 @@ RUN mkdir -pv /appscale/site-packages \
  && dpkg --install foundationdb-clients_6.1.8-1_amd64.deb \
  && git clone --quiet https://github.com/sjones4/appscale.git \
  && cd /root/appscale \
- && git checkout d1e95e9555fca58808666d975d2f32a3247fc7a4 \
+ && git checkout 7c7ab9b364e7e972a38e9ed3ecf334aaef9e0598 \
  && pip install --target /appscale/site-packages ./common ./AppDB foundationdb==6.1.8 \
  && cp -rp AppServer/google /appscale/site-packages/ \
  && touch /appscale/site-packages/appscale/__init__.py
