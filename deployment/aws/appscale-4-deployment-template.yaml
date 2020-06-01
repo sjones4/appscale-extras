@@ -1,0 +1,1027 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AppScale v4+ deployment using new ec2 agent, requires environment.
+
+Parameters:
+  AdminUserEmail:
+    Description: AppScale administrative user email address
+    Type: String
+    Default: admin@appscale.internal
+  AdminUserPassword:
+    Description: AppScale administrative user password
+    Type: String
+    NoEcho: true
+  Label:
+    Description: Short label identifying this AppScale deployment
+    Type: String
+    AllowedPattern: "[A-Z][A-Za-z0-9 ]{2,32}"
+    ConstraintDescription: >-
+      Label must start with an uppercase character and may contain 32
+      uppercase, lowercase, and numeric characters and spaces
+  InstancesLimit:
+    Description: AppScale deployment maximum instances (max_machines)
+    Type: Number
+    MinValue: 3
+    MaxValue: 50
+    Default: 5
+  DatabaseVolumeSize:
+    Description: AppScale deployment database volume size
+    Type: Number
+    MinValue: 10
+    MaxValue: 1000
+    Default: 100
+  Up:
+    Description: Perform "appscale up" on stack creation
+    Type: String
+    Default: 'yes'
+    AllowedValues: ['yes', 'no']
+    ConstraintDescription: '''yes'' for up, ''no'' to run manually later'
+  SubnetCidr:
+    Description: CIDR for the deployment subnet
+    Type: String
+    Default: "10.4.16.0/20"
+    AllowedValues:
+      - "10.4.16.0/20"
+      - "10.4.32.0/20"
+      - "10.4.48.0/20"
+      - "10.4.64.0/20"
+      - "10.4.80.0/20"
+      - "10.4.96.0/20"
+      - "10.4.112.0/20"
+      - "10.4.128.0/20"
+      - "10.4.144.0/20"
+      - "10.4.160.0/20"
+      - "10.4.176.0/20"
+      - "10.4.192.0/20"
+      - "10.4.208.0/20"
+      - "10.4.224.0/20"
+      - "10.4.240.0/20"
+  InstanceType:
+    Description: Instance type to use
+    Type: String
+    Default: t3.large
+    AllowedValues:
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - m5.4xlarge
+      - m5.8xlarge
+  ImageId:
+    Description: Identifier for the AppScale machine image
+    Type: String
+  KeyName:
+    Description: >-
+      EC2 keypair for instance SSH access. Use AWS Systems Manager Session
+      Manager for access without configuring a keypair.
+    Type: String
+    Default: ''
+  Zone:
+    Description: Availability zone to use
+    Type: String
+    Default: auto-select
+  AdminLocation:
+    Description: The IP address range that can be used to access admin endpoints
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+  SSHLocation:
+    Description: The IP address range that can be used for external SSH
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+  PublicLocation:
+    Description: The IP address range that can be used to access public endpoints
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: AppScale Administration
+        Parameters:
+          - AdminUserEmail
+          - AdminUserPassword
+      - Label:
+          default: AppScale Deployment Options
+        Parameters:
+          - Label
+          - ImageId
+          - InstanceType
+          - KeyName
+          - SubnetCidr
+          - Zone
+          - InstancesLimit
+          - DatabaseVolumeSize
+          - Up
+      - Label:
+          default: AppScale Networking
+        Parameters:
+          - SSHLocation
+          - AdminLocation
+          - PublicLocation
+    ParameterLabels:
+      AdminUserEmail:
+        default: Login Email
+      AdminUserPassword:
+        default: Login password
+      InstancesLimit:
+        default: Maximum instances
+      ImageId:
+        default: AppScale machine image
+      InstanceType:
+        default: AppScale instance type
+      KeyName:
+        default: SSH key (optional)
+      SubnetCidr:
+        default: Deployment subnet
+      Zone:
+        default: Availability Zone (optional)
+      SSHLocation:
+        default: SSH cidr range (optional)
+      AdminLocation:
+        default: Admin client cidr range (optional)
+      PublicLocation:
+        default: Client cidr range (optional)
+
+Conditions:
+  UseKeyNameParameter: !Not [!Equals ["", !Ref "KeyName"]]
+  UseZoneParameter: !Not [!Equals ["auto-select", !Ref "Zone"]]
+
+Resources:
+  # Network
+  Subnet:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !ImportValue AppScaleVpcId
+      AvailabilityZone: !If
+            - UseZoneParameter
+            - !Ref Zone
+            - Fn::Select:
+              - '0'
+              - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: !Ref SubnetCidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Subnet
+  RouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !ImportValue AppScaleVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Routes
+  DefaultRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !ImportValue AppScaleGatewayId
+  SubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+  NetworkAcl:
+    Type: "AWS::EC2::NetworkAcl"
+    Properties:
+      VpcId: !ImportValue AppScaleVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Network ACL
+  InboundSSHNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "110"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !ImportValue AppScaleVpcCidr
+      PortRange:
+        From: "22"
+        To: "22"
+  InboundHttpNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "120"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !ImportValue AppScaleVpcCidr
+      PortRange:
+        From: "80"
+        To: "80"
+  InboundHttpsNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "130"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !ImportValue AppScaleVpcCidr
+      PortRange:
+        From: "443"
+        To: "443"
+  InboundLowRegisteredNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "140"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !ImportValue AppScaleVpcCidr
+      PortRange:
+        From: "1024"
+        To: "32767"
+  InboundRemoteSSHNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "150"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref SSHLocation
+      PortRange:
+        From: "22"
+        To: "22"
+  InboundRemoteHttpNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "160"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref PublicLocation
+      PortRange:
+        From: "80"
+        To: "80"
+  InboundRemoteHttpsNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "161"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref PublicLocation
+      PortRange:
+        From: "443"
+        To: "443"
+  InboundRemoteAppHttpNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "162"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref PublicLocation
+      PortRange:
+        From: "8080"
+        To: "8099"
+  InboundRemoteAppHttpsNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "163"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref PublicLocation
+      PortRange:
+        From: "4380"
+        To: "4400"
+  InboundRemoteDashHttpNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "170"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref AdminLocation
+      PortRange:
+        From: "1080"
+        To: "1080"
+  InboundRemoteDashHttpsNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "171"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref AdminLocation
+      PortRange:
+        From: "1443"
+        To: "1443"
+  InboundRemoteAdminServerNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "172"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref AdminLocation
+      PortRange:
+        From: "17441"
+        To: "17441"
+  InboundRemoteAppControllerNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "173"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Ref AdminLocation
+      PortRange:
+        From: "17443"
+        To: "17443"
+  InboundHairpinNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "180"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: !Sub "${Instance.PublicIp}/32"
+      PortRange:
+        From: "20"
+        To: "20000"
+  InboundEphemeralNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "200"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "false"
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: "32768"
+        To: "65535"
+  OutboundNetworkAclEntry:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: "100"
+      Protocol: "6"
+      RuleAction: allow
+      Egress: "true"
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: "0"
+        To: "65535"
+  SubnetNetworkAclAssociation:
+    Type: "AWS::EC2::SubnetNetworkAclAssociation"
+    Properties:
+      SubnetId: !Ref Subnet
+      NetworkAclId: !Ref NetworkAcl
+
+  # Coordination
+  InstancesDoneWaitConditionHandle:
+    Type: "AWS::CloudFormation::WaitConditionHandle"
+  InstancesDoneWaitCondition:
+    Type: "AWS::CloudFormation::WaitCondition"
+    Properties:
+      Handle: !Ref InstancesDoneWaitConditionHandle
+      Timeout: '900'
+  Bucket:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Retain
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Bucket
+
+  # Credentials
+  InstanceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: /appscale/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+      Policies:
+        - PolicyName: AppScale
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "cloudformation:DescribeStacks"
+                  - "cloudformation:DescribeStackResource"
+                  - "cloudformation:DescribeStackResources"
+                Resource: !Ref AWS::StackId
+              - Effect: "Allow"
+                Action:
+                  - "ec2:Describe*"
+                  - "ec2:*Instance*"
+                  - "ec2:*Tags*"
+                  - "ec2:*Volume*"
+                Resource: "*"
+              - Effect: "Allow"
+                Action: "iam:PassRole"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/appscale/*"
+              - Effect: "Allow"
+                Action:
+                  - "s3:GetBucketLocation"
+                  - "s3:HeadBucket"
+                  - "s3:ListAllMyBuckets"
+                  - "s3:ListBucket"
+                  - "s3:ListBucketMultipartUploads"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "s3:AbortMultipartUpload"
+                  - "s3:DeleteObject"
+                  - "s3:DeleteObjectTagging"
+                  - "s3:GetObject"
+                  - "s3:GetObjectAcl"
+                  - "s3:GetObjectTagging"
+                  - "s3:GetObjectTorrent"
+                  - "s3:ListMultipartUploadParts"
+                  - "s3:PutObject"
+                  - "s3:PutObjectAcl"
+                  - "s3:PutObjectTagging"
+                Resource: !Sub "arn:aws:s3:::${Bucket}/*"
+              - Effect: "Allow"
+                Action: "secretsmanager:GetSecretValue"
+                Resource: !Ref DatabasePasswordSecret
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Instance Role
+  InstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /appscale/
+      Roles:
+        - !Ref InstanceRole
+  DatabasePasswordSecret:
+    Type: "AWS::SecretsManager::Secret"
+    Properties:
+      Description: PostgreSQL database password secret
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # Instances common
+  SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: AppScale security group
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !ImportValue AppScaleVpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Instance Security Group
+  SecurityGroupIngressTcp:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt SecurityGroup.GroupId
+      IpProtocol: 'tcp'
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !GetAtt SecurityGroup.GroupId
+  SecurityGroupIngressUdp:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt SecurityGroup.GroupId
+      IpProtocol: 'udp'
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !GetAtt SecurityGroup.GroupId
+  SecurityGroupIngressIcmp:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt SecurityGroup.GroupId
+      IpProtocol: 'icmp'
+      FromPort: -1
+      ToPort: -1
+      SourceSecurityGroupId: !GetAtt SecurityGroup.GroupId
+  AdminSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: AppScale administrator access security group
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: 17441
+          ToPort: 17441
+          CidrIp: !Ref AdminLocation
+        - IpProtocol: tcp
+          FromPort: 17443
+          ToPort: 17443
+          CidrIp: !Ref AdminLocation
+        - IpProtocol: tcp
+          FromPort: 1080
+          ToPort: 1080
+          CidrIp: !Ref AdminLocation
+        - IpProtocol: tcp
+          FromPort: 1443
+          ToPort: 1443
+          CidrIp: !Ref AdminLocation
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Administrative Security Group
+  AdminSecurityGroupIngressHairpin:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt AdminSecurityGroup.GroupId
+      IpProtocol: 'tcp'
+      FromPort: 20
+      ToPort: 20000
+      CidrIp: !Sub "${Instance.PublicIp}/32"
+  PublicSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: AppScale public/application access security group
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref PublicLocation
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref PublicLocation
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8099
+          CidrIp: !Ref PublicLocation
+        - IpProtocol: tcp
+          FromPort: 4380
+          ToPort: 4400
+          CidrIp: !Ref PublicLocation
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Public Security Group
+  LaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    DependsOn:
+     - DefaultRoute
+     - InboundEphemeralNetworkAclEntry
+     - OutboundNetworkAclEntry
+     - SubnetNetworkAclAssociation
+     - SubnetRouteTableAssociation
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref ImageId
+        InstanceType: !Ref InstanceType
+        KeyName: !If [UseKeyNameParameter, !Ref KeyName, !Ref "AWS::NoValue"]
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            SubnetId: !Ref Subnet
+            Groups:
+              - !GetAtt SecurityGroup.GroupId
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub AppScale ${Label} Scaled Instance
+              - Key: appscale:role
+                Value: compute
+              - Key: appscale:stack:id
+                Value: !Ref AWS::StackId
+              - Key: appscale:stack:terminate
+                Value: true
+        UserData:
+          Fn::Base64: !Sub |
+            #cloud-config
+            disable_root: 0
+            mounts:
+              - ["LABEL=appscale-opt", "/opt/appscale", "ext4", "defaults,nofail", "0", "2"]
+            packages:
+              - awscli
+            write_files:
+              - path: /etc/default/appscale
+                permissions: 0644
+                content: |
+                  APPSCALE_FIREWALL=false
+              - path: /etc/systemd/system/appscale-stack-delete.service
+                permissions: 0644
+                content: |
+                  [Unit]
+                  Description=AppScale AWS CloudFormation stack delete helper
+                  Wants=network-online.target nss-lookup.target time-sync.target
+                  After=network-online.target nss-lookup.target time-sync.target
+                  
+                  [Service]
+                  Type=oneshot
+                  EnvironmentFile=-/etc/default/appscale
+                  ExecStop=/usr/local/bin/appscale-stack-delete-handler.sh
+                  RemainAfterExit=yes
+                  
+                  [Install]
+                  WantedBy=multi-user.target
+              - path: /root/.aws/config
+                owner: "root:root"
+                permissions: 0600
+                content: |
+                  [default]
+                  region = ${AWS::Region}
+              - path: /root/.aws/models/secretsmanager/2017-10-17/service-2.json
+                owner: root:root
+                permissions: 0644
+                encoding: gz+b64
+                content: |
+                  H4sIAG/7qF0AA7VVTW/bMAy971cUOjudnWXt0Fu3NkMPzYK66w5FD4rNJhps
+                  yZPooEHR/z7K359JNyCXIHh85COfKPmVbUEboSS7YNNTlzksBuQhR84uXhlP
+                  xEMddr3ziedOvHNigQwTJSQuNTyLF4oaCDSgibnka9DE+G2UrJO9U4+wRCtU
+                  gYoIsGFCDOitCGCeRtGCx0CBy1/+iZ8XO7mtqhW8m5AYA1GxlhxTDbXgdlbg
+                  Qq6Lyr0Wkes17BkhFWEPnjRseHOYSkBzJElj/foOmDf3wKMULCJz6U7AYRvE
+                  xMbJ7Y2yKssf/j3hGv6kYPCnFoR9tApCJilaqtnwpF/rLk/IeknxANUk1ChY
+                  LmitNPX8WJMprFIdwELhXKUyvH4JILGjEb9m3cgtj0S45JomQ9B7WUVzw5wr
+                  6myXwXMuIjq8TgUqLnnk5wd/bftlb09v1HtGGfC7tIICuMuKGNRpYPeicFZo
+                  IK8fiw2iZXqy+x6vQGflKrhhYYnd24okXmzYEKkKdbg+0uKM0rNonmGHGzmy
+                  4ZkavV/eLfoSBJa95HegS7Do/0yWw1+F5HrXp+d4m+ujppvY5+b4kGNmv2Wm
+                  zPmmgSOEV/TTzGjAGdNhK0W3nNyDzOjWwbbstX2St5zYU3f2hf4KelG8Kqft
+                  xljq2axI/DTtZtZHPqr7+WxMtjF8nR0J2vtyH96zatV8PZlyZ95hydStsqpF
+                  +peJGntSp60itSqTPHc6Kzt07UdAGoFiC8UxOv0dGpM/WKm7LnUhFDG9KjxO
+                  rGvZO3QLxhRXui1GhPFX9OAVbpQtj68lZ7cW6nJF4+MP8nEFe2/7keT6n4mj
+                  zTXwxTmGlsOeeRph9RZ9+As5IxKAhQkAAA==
+              - path: /root/appscale-aws/locations.json.in
+                permissions: "0644"
+                owner: root
+                content: |
+                  {
+                     "node_info" : [
+                        {
+                           "cloud" : "cloud1",
+                           "instance_id" : "${!APPSCALE_COMPUTE_INSTANCE}",
+                           "public_ip" : "${!APPSCALE_COMPUTE_PUBLIC_IP}",
+                           "private_ip" : "${!APPSCALE_COMPUTE_PRIVATE_IP}",
+                           "roles" : [
+                              "compute",
+                              "memcache"
+                           ],
+                           "ssh_key" : "/etc/appscale/keys/cloud1/appscale.key"
+                        },
+                        {
+                           "cloud" : "cloud1",
+                           "instance_id" : "${!APPSCALE_DATABASE_INSTANCE}",
+                           "public_ip" : "${!APPSCALE_DATABASE_PUBLIC_IP}",
+                           "private_ip" : "${!APPSCALE_DATABASE_PRIVATE_IP}",
+                           "roles" : [
+                              "database",
+                              "db_master",
+                              "zookeeper"
+                           ],
+                           "ssh_key" : "/etc/appscale/keys/cloud1/appscale.key"
+                        },
+                        {
+                           "cloud" : "cloud1",
+                           "instance_id" : "${!APPSCALE_SHADOW_INSTANCE}",
+                           "public_ip" : "${!APPSCALE_SHADOW_PUBLIC_IP}",
+                           "private_ip" : "${!APPSCALE_SHADOW_PRIVATE_IP}",
+                           "roles" : [
+                              "load_balancer",
+                              "shadow",
+                              "taskqueue",
+                              "taskqueue_master"
+                           ],
+                           "ssh_key" : "/etc/appscale/keys/cloud1/appscale.key"
+                        }
+                     ],
+                     "infrastructure_info" : {
+                        "aws_launch_template_id" : "${!APPSCALE_LAUNCH_TEMPLATE}",
+                        "infrastructure" : "ec2t"
+                     }
+                  }
+              - path: /root/appscale-aws/AppScalefile.in
+                permissions: "0644"
+                owner: root
+                content: |
+                 ---
+                 ips_layout:
+                   - roles: [master]
+                     nodes: ${!APPSCALE_SHADOW_PRIVATE_IP}
+                   - roles: [database, zookeeper]
+                     nodes: ${!APPSCALE_DATABASE_PRIVATE_IP}
+                   - roles: [compute, memcache]
+                     nodes: ${!APPSCALE_COMPUTE_PRIVATE_IP}
+                 fdb_clusterfile_content: appscalefdb:appscalefdb@${!APPSCALE_DATABASE_PRIVATE_IP}:4500
+                 postgres_dsn: dbname=appscale-db user=appscale passfile=/etc/appscale/pgpass host=${!APPSCALE_DATABASE_PRIVATE_IP}
+                 login: ${!APPSCALE_SHADOW_PUBLIC_IP}
+                 min_machines: 3
+                 max_machines: 5
+                 infrastructure : ec2t
+                 aws_launch_template_id: ${!APPSCALE_LAUNCH_TEMPLATE}
+                 # ec2t agent does not use the key directly but the name is
+                 # used to derive names for configuration files
+                 keyname: appscale
+                 admin_user : ${AdminUserEmail}
+                 admin_pass : ${AdminUserPassword}
+              - path: /root/appscale-aws/createcluster.conf
+                permissions: "0644"
+                owner: root
+                content: |
+                  # Postgresql cluster creation options
+                  listen_addresses = '*'
+                  port = 5432
+                  hba_file = '/etc/postgresql/appscale_pg_hba.conf'
+                  ident_file = '/etc/postgresql/appscale_pg_ident.conf'
+              - path: /root/appscale-aws/files-by-role/database/etc/postgresql/appscale_pg_hba.conf
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  local   all             all                                     peer map=rootmap
+                  host    all             all             127.0.0.1/32            md5
+                  host    appscale-db     appscale        ${SubnetCidr}           md5
+              - path: /root/appscale-aws/files-by-role/database/etc/postgresql/appscale_pg_ident.conf
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  # MAPNAME       SYSTEM-USERNAME         PG-USERNAME
+                  rootmap         root                    postgres
+                  rootmap         root                    appscale
+              - path: /usr/local/bin/appscale-stack-delete-handler.sh
+                permissions: 0755
+                content: |
+                  #!/bin/bash
+                  # Check if stack deletion in progress and terminate scaled compute instances
+                  STACK_ID="${AWS::StackId}"
+                  STACK_STATUS="$(aws cloudformation describe-stacks \
+                    --stack-name ${!STACK_ID} \
+                    --output text \
+                    --query 'Stacks[0].StackStatus')"
+                  if [ "${!STACK_STATUS}" = "DELETE_IN_PROGRESS" ] ; then
+                    echo "Stack status ${!STACK_STATUS}, performing clean up"
+                  
+                    TERMINATE_INSTANCES="$(aws ec2 describe-instances \
+                      --filter Name=tag:appscale:stack:terminate,Values=true \
+                               Name=tag:appscale:stack:id,Values=${!STACK_ID} \
+                      --output text \
+                      --query 'Reservations[*].Instances[*].InstanceId')"
+                    
+                    if [ -n "${!TERMINATE_INSTANCES}" ] ; then
+                      aws ec2 terminate-instances \
+                        --instance-ids ${!TERMINATE_INSTANCES} \
+                        --output text
+                  
+                      echo "Requested termination for instances "${!TERMINATE_INSTANCES}
+                    fi
+                  else
+                    echo "Stack status ${!STACK_STATUS}"
+                  fi
+              - path: /usr/local/bin/appscale-stack-instance-init.sh
+                permissions: 0755
+                content: |
+                  #!/bin/bash
+                  set -euxo pipefail
+                  STACK_ID="${AWS::StackId}"
+                  BUCKET="${Bucket}"
+                  POSTGRES_SECRET_ID="${DatabasePasswordSecret}"
+                  INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+                  PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+                  WAITCONDURL="${InstancesDoneWaitConditionHandle}"
+                  APPSCALE_UP="${Up}"
+                  
+                  # Get roles for host
+                  ROLES=$(aws ec2 describe-tags \
+                    --filter Name=resource-id,Values=${!INSTANCE_ID} \
+                             Name=key,Values=appscale:role \
+                    --output text \
+                    --query 'Tags[0].Value')
+                  echo "Processing roles for host: "${!ROLES}
+                  
+                  # Create or wait for SSH keys
+                  if [ ! -f /root/.ssh/id_rsa.pub ] ; then
+                    if grep -qw shadow <<<"${!ROLES}"; then
+                      echo "Generating SSH key for deployment"
+                      ssh-keygen -q -t rsa -f "/root/.ssh/id_rsa" -N ""
+                      cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
+                      aws s3 sync \
+                        --exclude known_hosts \
+                        "/root/.ssh" "s3://${!BUCKET}/ssh/"
+                      mkdir -p /etc/appscale/keys/cloud1/
+                      cp /root/.ssh/id_rsa /etc/appscale/keys/cloud1/appscale.key
+                    else
+                      echo "Configuring SSH key for deployment"
+                      mkdir -p /root/.ssh
+                      chmod 600 /root/.ssh
+                      while true; do
+                        aws s3 sync \
+                          "s3://${!BUCKET}/ssh/" "/root/.ssh/" || true
+                        if [ -f /root/.ssh/id_rsa ] ; then
+                          chmod 600 /root/.ssh/authorized_keys /root/.ssh/id_rsa
+                          chmod 644 /root/.ssh/id_rsa.pub
+                          break
+                        fi
+                        echo "Waiting for SSH keys..."
+                        sleep 15
+                      done
+                    fi
+                  fi
+                  
+                  # Write database credentials
+                  POSTGRES_PASSWORD="$(aws secretsmanager get-secret-value \
+                    --secret-id ${!POSTGRES_SECRET_ID} \
+                    --output text --query SecretString)"
+                  echo "*:*:*:appscale:${!POSTGRES_PASSWORD}" > /etc/appscale/pgpass
+                  chmod 600 /etc/appscale/pgpass
+                  
+                  # Perform shadow role initialization
+                  if grep -qw shadow <<<"${!ROLES}"; then
+                    echo "Configuring for shadow role"
+                  
+                    echo "Generating deployment configuration"
+                    function get-instance-property {
+                      aws ec2 describe-instances \
+                        --filter Name=tag:aws:cloudformation:logical-id,Values=${!1} \
+                                 Name=tag:aws:cloudformation:stack-id,Values=${!STACK_ID} \
+                        --output text \
+                        --query 'Reservations[*].Instances[*].'${!2}
+                    }
+                    export APPSCALE_COMPUTE_INSTANCE="$(get-instance-property ComputeInstance InstanceId)"
+                    export APPSCALE_COMPUTE_PRIVATE_IP="$(get-instance-property ComputeInstance PrivateIpAddress)"
+                    export APPSCALE_COMPUTE_PUBLIC_IP="$(get-instance-property ComputeInstance PublicIpAddress)"
+                    export APPSCALE_COMPUTE_PUBLIC_IP="${!APPSCALE_COMPUTE_PUBLIC_IP:-${!APPSCALE_COMPUTE_PRIVATE_IP}}"
+                    export APPSCALE_DATABASE_INSTANCE="$(get-instance-property DatabaseInstance InstanceId)"
+                    export APPSCALE_DATABASE_PRIVATE_IP="$(get-instance-property DatabaseInstance PrivateIpAddress)"
+                    export APPSCALE_DATABASE_PUBLIC_IP="$(get-instance-property DatabaseInstance PublicIpAddress)"
+                    export APPSCALE_DATABASE_PUBLIC_IP="${!APPSCALE_DATABASE_PUBLIC_IP:-${!APPSCALE_DATABASE_PRIVATE_IP}}"
+                    export APPSCALE_LAUNCH_TEMPLATE="$(aws cloudformation describe-stack-resource \
+                      --stack-name ${!STACK_ID} \
+                      --logical-resource-id LaunchTemplate \
+                      --output text \
+                      --query 'StackResourceDetail.PhysicalResourceId')"
+                    export APPSCALE_SHADOW_INSTANCE="$(get-instance-property Instance InstanceId)"
+                    export APPSCALE_SHADOW_PRIVATE_IP="$(get-instance-property Instance PrivateIpAddress)"
+                    export APPSCALE_SHADOW_PUBLIC_IP="$(get-instance-property Instance PublicIpAddress)"
+                    export APPSCALE_SHADOW_PUBLIC_IP="${!APPSCALE_SHADOW_PUBLIC_IP:-${!APPSCALE_SHADOW_PRIVATE_IP}}"
+                    mkdir -pv /root/.appscale
+                    envsubst < /root/appscale-aws/AppScalefile.in > /root/AppScalefile
+                    envsubst < /root/appscale-aws/locations.json.in > /root/.appscale/locations-appscale.json
+                    
+                    # Start appscale
+                    if [ ${!APPSCALE_UP} = "yes" ] ; then
+                      echo "Performing AppScale up"
+                      cd /root
+                      yes | appscale up || true
+                    fi
+                    
+                    # Signal cloudformation wait condition handle
+                    echo "Signalling stack completion"
+                    curl -s -X PUT -H 'Content-Type:' \
+                      --data-binary '{"Status": "SUCCESS", "UniqueId": "up", "Data": "-", "Reason": "AppScale up" }' \
+                      ${!WAITCONDURL}
+                  fi
+                  
+                  # Perform database role initialization
+                  if grep -qw database <<<"${!ROLES}"; then
+                    echo "Configuring for database role"
+                  
+                    while ! test -e "/dev/nvme1n1"; do
+                      echo "Waiting for database volume..."
+                      sleep 15
+                    done
+                    if [ -n "$(blkid /dev/nvme1n1)" ] ; then
+                      echo "Formatting database volume"
+                      mkfs -t ext4 -L appscale-opt /dev/nvme1n1
+                    fi
+                    test -d /opt/appscale || mkdir -v /opt/appscale
+                  
+                    echo "Deploying files for database role"
+                    cp -rfv /root/appscale-aws/files-by-role/database/* /
+                  
+                    echo "Starting FDB"
+                    echo "appscalefdb:appscalefdb@${!PRIVATE_IP}:4500" > \
+                      /etc/foundationdb/fdb.cluster
+                    chmod 644 /etc/foundationdb/fdb.cluster
+                    /root/appscale-thirdparties/foundationdb/configure-and-start-fdb.sh \
+                      --fdbcli-command 'configure new single ssd'
+                  
+                    echo "Starting Postgres"
+                    while ! apt-get --assume-yes --quiet install postgresql-10; do sleep 5; done
+                    systemctl disable --now postgresql.service
+                    pg_createcluster 10 appscale --createclusterconf=/root/appscale-aws/createcluster.conf
+                    systemctl enable --now postgresql@10-appscale.service
+                    psql -U postgres --command "CREATE ROLE appscale WITH LOGIN PASSWORD '${!POSTGRES_PASSWORD}';"
+                    createdb -U postgres --owner appscale appscale-db
+                  fi
+            runcmd:
+              - systemctl enable --now appscale-stack-delete.service
+              - appscale-stack-instance-init.sh
+
+  # Cluster fixed instances (additional compute scaled)
+  ComputeInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.DefaultVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Compute/Memcache Instance
+        - Key: appscale:role
+          Value: compute memcache
+        - Key: appscale:stack:terminate
+          Value: false
+  DatabaseVolume:
+    Type: "AWS::EC2::Volume"
+    DeletionPolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      Size: !Ref DatabaseVolumeSize
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Database Volume
+  DatabaseInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.DefaultVersionNumber
+      Volumes:
+        - VolumeId: !Ref DatabaseVolume
+          Device: /dev/sdf
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Database Instance
+        - Key: appscale:role
+          Value: database db_master zookeeper
+        - Key: appscale:stack:terminate
+          Value: false
+  Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.DefaultVersionNumber
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref Subnet
+          GroupSet:
+            - !GetAtt SecurityGroup.GroupId
+            - !GetAtt AdminSecurityGroup.GroupId
+            - !GetAtt PublicSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub AppScale ${Label} Instance
+        - Key: appscale:role
+          Value: load_balancer shadow taskqueue taskqueue_master
+        - Key: appscale:stack:terminate
+          Value: false
+
+Outputs:
+  Bucket:
+    Description: AppScale deployment bucket
+    Value: !Ref Bucket
+  Zone:
+    Description: AppScale deployment availability zone
+    Value: !GetAtt Subnet.AvailabilityZone
+  Vpc:
+    Description: AppScale deployment vpc identifier
+    Value: !GetAtt Subnet.VpcId
+  Subnet:
+    Description: AppScale deployment subnet identifier
+    Value: !Ref Subnet
+  Instance:
+    Description: Appscale deployment instance identifier
+    Value: !Ref Instance
+
+
