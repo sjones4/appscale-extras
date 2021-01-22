@@ -1,0 +1,308 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Cloud image (ami) builder for AppScale deployments, requires environment
+Parameters:
+  EC2InstanceType:
+    Description: EC2 instance type for the builder
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+  SSHLocation:
+    Description: The IP address range that can be used for external SSH
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+  AppScaleBootstrapUrl:
+    Description: AppScale bootstrap script location
+    Type: String
+    Default: https://raw.githubusercontent.com/AppScale/appscale/master/bootstrap.sh
+  AppScaleRepo:
+    Description: AppScale git repository
+    Type: String
+    Default: git://github.com/appscale/appscale.git
+  AppScaleBranch:
+    Description: AppScale git repository branch
+    Type: String
+    Default: master
+  AppScaleToolsRepo:
+    Description: AppScale tools git repository
+    Type: String
+    Default: git://github.com/appscale/appscale-tools.git
+  AppScaleToolsBranch:
+    Description: AppScale tools git repository branch
+    Type: String
+    Default: master
+  AppScaleAgentsRepo:
+    Description: AppScale agents git repository
+    Type: String
+    Default: git://github.com/appscale/appscale-agents.git
+  AppScaleAgentsBranch:
+    Description: AppScale agents git repository branch
+    Type: String
+    Default: master
+  AppScaleThirdpartiesRepo:
+    Description: AppScale third parties git repository
+    Type: String
+    Default: git://github.com/appscale/appscale-thirdparties.git
+  AppScaleThirdpartiesBranch:
+    Description: AppScale third parties git repository branch
+    Type: String
+    Default: master
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: AppScale Builder Options
+        Parameters:
+          - EC2InstanceType
+          - SSHLocation
+          - AppScaleBootstrapUrl
+      - Label:
+          default: AppScale Repository Options
+        Parameters:
+          - AppScaleRepo
+          - AppScaleBranch
+          - AppScaleAgentsRepo
+          - AppScaleAgentsBranch
+          - AppScaleToolsRepo
+          - AppScaleToolsBranch
+          - AppScaleThirdpartiesRepo
+          - AppScaleThirdpartiesBranch
+    ParameterLabels:
+      EC2InstanceType:
+        default: Instance type for the image builder
+      SSHLocation:
+        default: SSH cidr range (optional)
+      AppScaleBootstrapUrl:
+        default: Bootstrap script URL
+      AppScaleRepo:
+        default: AppScale git repository URL
+      AppScaleBranch:
+        default: AppScale git repository branch
+      AppScaleAgentsRepo:
+        default: AppScale Agents git repository URL
+      AppScaleAgentsBranch:
+        default: AppScale Agents git repository branch
+      AppScaleToolsRepo:
+        default: AppScale Tools git repository URL
+      AppScaleToolsBranch:
+        default: AppScale Tools git repository branch
+      AppScaleThirdpartiesRepo:
+        default: AppScale third-party installers git repository URL
+      AppScaleThirdpartiesBranch:
+        default: AppScale third-party installers git repository branch
+Mappings:
+  # https://cloud-images.ubuntu.com/locator/ec2/
+  # search for hvm:ebs-ssd 18.04 LTS
+  AWSRegion2AMI:
+    ca-central-1:
+      Bionic1804: ami-098dce2d49ef14294
+    eu-central-1:
+      Bionic1804: ami-0b418580298265d5c
+    eu-north-1:
+      Bionic1804: ami-0b7937aeb16a7eb94
+    eu-west-1:
+      Bionic1804: ami-035966e8adab4aaad
+    eu-west-2:
+      Bionic1804: ami-006a0174c6c25ac06
+    eu-west-3:
+      Bionic1804: ami-096b8af6e7e8fb927
+    us-east-1:
+      Bionic1804: ami-07ebfd5b3428b6f4d
+    us-east-2:
+      Bionic1804: ami-0fc20dd1da406780b
+    us-west-1:
+      Bionic1804: ami-03ba3948f6c37a4b0
+    us-west-2:
+      Bionic1804: ami-0d1cd67c26f5fca19
+Resources:
+  BuilderRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: /appscale/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+        - "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess"
+      Policies:
+        - PolicyName: appscale-image-build
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ec2:CreateSnapshot
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:RegisterImage
+                Resource: "*"
+  BuilderInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /appscale/
+      Roles:
+        - !Ref BuilderRole
+  BuilderSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Security group for image builder host
+      VpcId: !ImportValue AppScaleVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !ImportValue AppScaleVpcCidr
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+      Tags:
+        - Key: Name
+          Value: AppScale Builder Group
+  BuilderInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      IamInstanceProfile: !Ref BuilderInstanceProfile
+      ImageId: !FindInMap
+        - AWSRegion2AMI
+        - !Ref AWS::Region
+        - Bionic1804
+      InstanceType: !Ref EC2InstanceType
+      UserData:
+        Fn::Base64: !Sub |
+          #cloud-config
+          packages:
+           - awscli
+           - curl
+           - psmisc
+          write_files:
+           - path: /root/appscale-build-image.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               set -eo pipefail
+               
+               BOOTSTRAP_URL="${AppScaleBootstrapUrl}"
+               BOOTSTRAP_REPO="${AppScaleRepo}"
+               BOOTSTRAP_BRANCH="${AppScaleBranch}"
+               BOOTSTRAP_TOOLS_REPO="${AppScaleToolsRepo}"
+               BOOTSTRAP_TOOLS_BRANCH="${AppScaleToolsBranch}"
+               BOOTSTRAP_AGENTS_REPO="${AppScaleAgentsRepo}"
+               BOOTSTRAP_AGENTS_BRANCH="${AppScaleAgentsBranch}"
+               BOOTSTRAP_THIRDPARTIES_REPO="${AppScaleThirdpartiesRepo}"
+               BOOTSTRAP_THIRDPARTIES_BRANCH="${AppScaleThirdpartiesBranch}"
+               
+               declare -A SYSTEMD_BOOT_SERVICES
+               for SYSTEMD_SERVICE in $(systemctl --plain list-dependencies multi-user.target | grep '.service$')
+               do
+                 SYSTEMD_BOOT_SERVICES[$SYSTEMD_SERVICE]="old"
+               done
+               
+               echo "Disabling service start on install"
+               echo "exit 101" > "/usr/sbin/policy-rc.d"
+               chmod +x "/usr/sbin/policy-rc.d"
+               
+               echo "Running AppScale bootstrap"
+               BOOTSTRAP_TAG_OPT=""
+               [ "${!BOOTSTRAP_BRANCH}" != "master" ] || BOOTSTRAP_TAG_OPT="--tag dev"
+               curl -o /tmp/bootstrap.sh "${!BOOTSTRAP_URL}"
+               HOME=/root sh /tmp/bootstrap.sh \
+                 ${!BOOTSTRAP_TAG_OPT} \
+                 --repo          ${!BOOTSTRAP_REPO} \
+                 --branch        ${!BOOTSTRAP_BRANCH} \
+                 --tools-repo    ${!BOOTSTRAP_TOOLS_REPO} \
+                 --tools-branch  ${!BOOTSTRAP_TOOLS_BRANCH} \
+                 --agents-repo         ${!BOOTSTRAP_AGENTS_REPO} \
+                 --agents-branch       ${!BOOTSTRAP_AGENTS_BRANCH} \
+                 --thirdparties-repo   ${!BOOTSTRAP_THIRDPARTIES_REPO} \
+                 --thirdparties-branch ${!BOOTSTRAP_THIRDPARTIES_BRANCH}
+               
+               echo "Disabling new services"
+               for SYSTEMD_SERVICE in $(systemctl --plain list-dependencies multi-user.target | grep '.service$')
+               do
+                 if [ -z "${!SYSTEMD_BOOT_SERVICES[${!SYSTEMD_SERVICE}]}" ] ; then
+                   echo "Disabling new service ${!SYSTEMD_SERVICE}"
+                   systemctl disable "${!SYSTEMD_SERVICE}"
+                 fi
+               done
+               
+               echo "Enabling AppScale controller service"
+               systemctl enable appscale-controller
+               
+               echo "Enabling root login for image"
+               echo "disable_root: false" > /etc/cloud/cloud.cfg.d/92_root_login.cfg
+               
+               echo "Clearing temporary state"
+               rm -vf "/usr/sbin/policy-rc.d"
+               rm -rf "/root/.cache"
+               apt-get clean
+               rm -rvf /var/lib/foundationdb/data/*
+           - path: /root/appscale-upload-image.sh
+             owner: "root:root"
+             permissions: "0755"
+             content: |
+               #!/bin/bash
+               set -euxo pipefail
+               
+               export AWS_DEFAULT_REGION="${AWS::Region}"
+               
+               cloud-init clean --logs || true
+               rm -vf /var/lib/systemd/timers/stamp-*.timer
+               rm -vf "/etc/udev/rules.d/70-persistent-net.rules"
+               journalctl --flush
+               journalctl --rotate
+               journalctl --vacuum-time=0
+               truncate --size 0 "/etc/machine-id"
+               
+               echo "Creating snapshot"
+               INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+               VOLUME_ID=$(aws ec2 describe-volumes --filters Name=attachment.instance-id,Values="${!INSTANCE_ID}" --query "Volumes[0].VolumeId" --output text)
+               SNAPSHOT_ID=$(aws ec2 create-snapshot --volume-id ${!VOLUME_ID} --query SnapshotId --output text)
+               aws ec2 wait snapshot-completed --snapshot-id ${!SNAPSHOT_ID}
+               aws ec2 register-image \
+                 --name "appscale-$(date +%Y%m%d%H%S)" \
+                 --description "AppScale on Ubuntu 18.04 LTS" \
+                 --architecture x86_64 \
+                 --block-device-mappings "DeviceName=/dev/sda1,Ebs={DeleteOnTermination=true,SnapshotId=${!SNAPSHOT_ID},VolumeSize=8,VolumeType=gp2}" \
+                 --ena-support \
+                 --root-device-name /dev/sda1 \
+                 --sriov-net-support simple \
+                 --virtualization-type hvm
+          runcmd:
+           - /root/appscale-build-image.sh
+           - /root/appscale-upload-image.sh
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !ImportValue AppScalePublicSubnetId
+          AssociatePublicIpAddress: true
+          GroupSet:
+            - !Ref BuilderSecurityGroup
+      Tags:
+        - Key: Name
+          Value: AppScale Image Builder
+Outputs:
+  BuilderInstanceId:
+    Description: Identifier for the AppScale image builder instance
+    Value: !Ref BuilderInstance
+  BuilderHost:
+    Description: Hostname for the AppScale image builder instance
+    Value: !GetAtt BuilderInstance.PublicDnsName
+  BuilderIp:
+    Description: IP address for the AppScale image builder instance
+    Value: !GetAtt BuilderInstance.PublicIp
